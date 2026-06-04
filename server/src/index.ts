@@ -23,8 +23,19 @@ const HOST = process.env.HOST ?? "0.0.0.0";
 const SOURCE = (process.env.DATA_SOURCE as DataSource) ?? "radio";
 const RADIO_URL =
   process.env.AIRCRAFT_JSON_URL ?? "http://localhost:8080/data/aircraft.json";
-const API_URL =
-  process.env.API_URL ?? "https://api.airplanes.live/v2/point/{lat}/{lon}/{r}";
+// Ordered re-api failover chain. Override with a comma-separated API_URL.
+// All three speak the same /v2/point/{lat}/{lon}/{r} schema (radius in NM).
+const DEFAULT_API_URLS = [
+  "https://api.airplanes.live/v2/point/{lat}/{lon}/{r}",
+  "https://api.adsb.lol/v2/point/{lat}/{lon}/{r}",
+  "https://opendata.adsb.fi/api/v2/lat/{lat}/lon/{lon}/dist/{r}",
+];
+const API_URLS = (process.env.API_URL
+  ? process.env.API_URL.split(",")
+  : DEFAULT_API_URLS
+)
+  .map((s) => s.trim())
+  .filter(Boolean);
 const POLL_MS = Number(process.env.POLL_MS ?? 1000);
 const ROUTE_CACHE_HOURS = Number(process.env.ROUTE_CACHE_HOURS ?? 12);
 // When on radio, also poll the API and merge (keeps landing aircraft alive).
@@ -57,7 +68,7 @@ async function main(): Promise<void> {
   const poller = new Poller({
     source: SOURCE,
     radioUrl: RADIO_URL,
-    apiUrlTemplate: API_URL,
+    apiUrlTemplates: API_URLS,
     pollMs: POLL_MS,
     supplementApi: SUPPLEMENT_API,
     apiPollMs: API_POLL_MS,
@@ -101,7 +112,7 @@ async function main(): Promise<void> {
 
   server.listen(PORT, HOST, () => {
     console.log(`[server] listening on http://${HOST}:${PORT}`);
-    console.log(`[server] data source: ${SOURCE} (${SOURCE === "radio" ? RADIO_URL : API_URL})`);
+    console.log(`[server] data source: ${SOURCE} (${SOURCE === "radio" ? RADIO_URL : API_URLS.join(" → ")})`);
     console.log(`[server] control panel: http://<this-host>:${PORT}/control`);
   });
 }

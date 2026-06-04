@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Config, ShowFields } from "@shared/index.js";
 import { useStream } from "../lib/useStream.js";
-import { nextISSPass, type Tle } from "../display/celestial.js";
+import { nextISSPassInfo, type Tle } from "../display/celestial.js";
 import { ColorRow, Row, Section, Segmented, Slider, Toggle } from "./components.js";
 
 function skyTimeLabel(offsetMin: number): string {
@@ -44,7 +44,7 @@ export function Control() {
     };
   }, []);
   const nextPass = useMemo(
-    () => (tles.length && cfg ? nextISSPass(Date.now(), cfg.centerLat, cfg.centerLon, tles) : null),
+    () => (tles.length && cfg ? nextISSPassInfo(Date.now(), cfg.centerLat, cfg.centerLon, tles) : null),
     [tles, cfg?.centerLat, cfg?.centerLon],
   );
 
@@ -231,8 +231,8 @@ export function Control() {
             </button>
             {nextPass && (
               <button className="chip on"
-                onClick={() => set({ skyTimeOffsetMin: Math.round((nextPass - Date.now()) / 60000) })}>
-                ISS pass in {fmtIn(nextPass - Date.now())} → jump
+                onClick={() => set({ skyTimeOffsetMin: Math.round((nextPass.rise - Date.now()) / 60000) })}>
+                ISS in {fmtIn(nextPass.rise - Date.now())} · max {nextPass.peakAlt}° · {nextPass.durationMin}m → jump
               </button>
             )}
           </div>

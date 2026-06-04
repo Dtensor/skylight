@@ -111,11 +111,15 @@ export interface Config {
 }
 
 export const DEFAULT_CONFIG: Config = {
-  // Default center: San Francisco International (SFO). Set this to your own
-  // location — ideally where you'll be looking up at the ceiling.
-  centerLat: 37.6213,
-  centerLon: -122.379,
-  radiusMiles: 3,
+  // Default center: Kalimpong, West Bengal (Himalayan foothills). Set this to
+  // your own location — ideally where you'll be looking up at the ceiling.
+  // Radius widened from the dense-airspace default of 3 mi: Kalimpong sits in
+  // quiet Himalayan airspace (often 0 aircraft within 50 mi), so 150 mi keeps the
+  // ceiling populated with high-altitude overflights + Bagdogra (IXB) traffic.
+  // Drop this toward 3-10 mi from the phone panel for the true "overhead" effect.
+  centerLat: 27.066,
+  centerLon: 88.4685,
+  radiusMiles: 150,
 
   rotationDeg: 0,
   mirrorX: true,

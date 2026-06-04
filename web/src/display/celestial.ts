@@ -140,6 +140,61 @@ export function computeSky(date: Date, latDeg: number, lonDeg: number, o: SkyOpt
   return sky;
 }
 
+/** A forthcoming ISS pass, with how high and how long it gets. */
+export interface IssPass {
+  /** Timestamp (ms) when the ISS rises above `minAlt`. */
+  rise: number;
+  /** Peak elevation during the pass, degrees (a 70°+ pass is brilliant; ~10° grazes). */
+  peakAlt: number;
+  /** Minutes the ISS stays above `minAlt`. */
+  durationMin: number;
+}
+
+/**
+ * Find the next ISS pass and characterize it: when it rises above `minAlt`,
+ * its peak elevation, and its duration. Scans forward in 30 s steps, then keeps
+ * scanning through the pass to capture the peak and the set time.
+ */
+export function nextISSPassInfo(
+  fromMs: number,
+  latDeg: number,
+  lonDeg: number,
+  tles: Tle[],
+  minAlt = 10,
+  horizonHours = 12,
+): IssPass | null {
+  const iss = tles.find((t) => /ISS|ZARYA/i.test(t.name));
+  if (!iss) return null;
+  const rec = getSatrec(iss);
+  if (!rec) return null;
+  const observerGd = { longitude: lonDeg * D2R, latitude: latDeg * D2R, height: 0 };
+  const stepMs = 30_000;
+  const end = fromMs + horizonHours * 3600_000;
+  let rise: number | null = null;
+  let peakAlt = -90;
+  for (let t = fromMs + stepMs; t < end; t += stepMs) {
+    const date = new Date(t);
+    const pv = satellite.propagate(rec, date);
+    const pos = pv?.position;
+    if (!pos || typeof pos === "boolean") {
+      if (rise !== null) break;
+      continue;
+    }
+    const ecf = satellite.eciToEcf(pos, satellite.gstime(date));
+    const alt = satellite.ecfToLookAngles(observerGd, ecf).elevation * R2D;
+    if (alt >= minAlt) {
+      if (rise === null) rise = t;
+      if (alt > peakAlt) peakAlt = alt;
+    } else if (rise !== null) {
+      return { rise, peakAlt: Math.round(peakAlt), durationMin: Math.round((t - rise) / 60000) };
+    }
+  }
+  if (rise !== null) {
+    return { rise, peakAlt: Math.round(peakAlt), durationMin: Math.round((end - rise) / 60000) };
+  }
+  return null;
+}
+
 /** Find the next time the ISS rises above `minAlt` degrees, scanning forward. */
 export function nextISSPass(
   fromMs: number,
@@ -149,20 +204,5 @@ export function nextISSPass(
   minAlt = 10,
   horizonHours = 12,
 ): number | null {
-  const iss = tles.find((t) => /ISS|ZARYA/i.test(t.name));
-  if (!iss) return null;
-  const rec = getSatrec(iss);
-  if (!rec) return null;
-  const observerGd = { longitude: lonDeg * D2R, latitude: latDeg * D2R, height: 0 };
-  const stepMs = 30_000;
-  for (let t = fromMs + stepMs; t < fromMs + horizonHours * 3600_000; t += stepMs) {
-    const date = new Date(t);
-    const pv = satellite.propagate(rec, date);
-    const pos = pv?.position;
-    if (!pos || typeof pos === "boolean") continue;
-    const ecf = satellite.eciToEcf(pos, satellite.gstime(date));
-    const alt = satellite.ecfToLookAngles(observerGd, ecf).elevation * R2D;
-    if (alt >= minAlt) return t;
-  }
-  return null;
+  return nextISSPassInfo(fromMs, latDeg, lonDeg, tles, minAlt, horizonHours)?.rise ?? null;
 }

@@ -62,8 +62,9 @@ export interface PollerOptions {
   source: DataSource;
   /** dump1090 aircraft.json URL (radio source). */
   radioUrl: string;
-  /** airplanes.live point template, {lat}/{lon}/{r} are filled from config. */
-  apiUrlTemplate: string;
+  /** Ordered re-api point templates (airplanes.live, adsb.lol, adsb.fi, …).
+   *  {lat}/{lon}/{r} are filled from config. Tried in order with failover. */
+  apiUrlTemplates: string[];
   pollMs: number;
   /** When source is "radio", also poll the API and merge (keeps landing
    *  aircraft alive when local ADS-B drops them). */
@@ -120,6 +121,10 @@ export class Poller {
   private last: Aircraft[] = [];
   /** Most recent API snapshot, used to supplement the radio. */
   private lastApi: Aircraft[] = [];
+  /** Index of the API endpoint that last responded — stick to it until it fails. */
+  private apiIdx = 0;
+  /** Host of the active API endpoint, surfaced in status messages. */
+  private apiHost = "";
   /** hex -> last good enrichment, so resolved routes never flicker back to "—". */
   private sticky = new Map<string, StickyEnrichment>();
 
@@ -159,17 +164,43 @@ export class Poller {
     this.apiTimer = null;
   }
 
-  private async fetchList(source: DataSource, now: number): Promise<Aircraft[] | null> {
-    try {
-      const url = source === "radio" ? this.o.radioUrl : this.buildApiUrl();
-      const json = await fetchJson(url);
-      const rawList: RawAircraft[] = json.aircraft ?? json.ac ?? [];
-      const list: Aircraft[] = [];
-      for (const raw of rawList) {
-        const ac = normalize(raw, now);
-        if (ac) list.push(ac);
+  private parseList(json: any, now: number): Aircraft[] {
+    const rawList: RawAircraft[] = json.aircraft ?? json.ac ?? [];
+    const list: Aircraft[] = [];
+    for (const raw of rawList) {
+      const ac = normalize(raw, now);
+      if (ac) list.push(ac);
+    }
+    return list;
+  }
+
+  /** Try each API endpoint in order, starting from the last good one, and
+   *  return the first that responds. Null only if every endpoint fails. */
+  private async fetchApi(now: number): Promise<Aircraft[] | null> {
+    const templates = this.o.apiUrlTemplates;
+    for (let i = 0; i < templates.length; i++) {
+      const idx = (this.apiIdx + i) % templates.length;
+      const url = this.buildApiUrl(templates[idx]);
+      try {
+        const list = this.parseList(await fetchJson(url), now);
+        this.apiIdx = idx; // stick to the endpoint that worked
+        try {
+          this.apiHost = new URL(url).host;
+        } catch {
+          this.apiHost = "";
+        }
+        return list;
+      } catch {
+        // try the next endpoint in the chain
       }
-      return list;
+    }
+    return null;
+  }
+
+  private async fetchList(source: DataSource, now: number): Promise<Aircraft[] | null> {
+    if (source === "api") return this.fetchApi(now);
+    try {
+      return this.parseList(await fetchJson(this.o.radioUrl), now);
     } catch {
       return null;
     }
@@ -180,10 +211,10 @@ export class Poller {
     if (list) this.lastApi = list;
   }
 
-  private buildApiUrl(): string {
+  private buildApiUrl(template: string): string {
     const c = this.o.getConfig();
     const r = Math.min(250, Math.ceil(c.radiusMiles * NM_PER_MILE) + 1);
-    return this.o.apiUrlTemplate
+    return template
       .replace("{lat}", String(c.centerLat))
       .replace("{lon}", String(c.centerLon))
       .replace("{r}", String(r));
@@ -207,7 +238,11 @@ export class Poller {
       ok: true,
       count: merged.length,
       lastOk: now,
-      message: supplement ? `radio + ${this.lastApi.length} via API` : undefined,
+      message: supplement
+        ? `radio + ${this.lastApi.length} via ${this.apiHost || "API"}`
+        : this.o.source === "api" && this.apiHost
+          ? `via ${this.apiHost}`
+          : undefined,
     };
     this.o.onSnapshot(now, merged);
     this.o.onStatus(this.status);
