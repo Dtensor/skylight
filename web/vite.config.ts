@@ -21,10 +21,13 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    // The projector's Android WebView is older than a desktop browser.
+    target: "chrome66",
     rollupOptions: {
       input: {
         index: resolve(__dirname, "index.html"),
         control: resolve(__dirname, "control.html"),
+        wall: resolve(__dirname, "wall.html"),
       },
     },
   },

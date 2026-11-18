@@ -11,8 +11,11 @@ export interface Tle {
   line2: string;
 }
 
-const DEFAULT_URL =
-  "https://celestrak.org/NORAD/elements/gp.php?GROUP=visual&FORMAT=tle";
+const DEFAULT_URL = [
+  "https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=tle",
+  "https://celestrak.org/NORAD/elements/gp.php?GROUP=visual&FORMAT=tle",
+  "https://api.wheretheiss.at/v1/satellites/25544/tles?format=text",
+].join(",");
 
 function parseTle(text: string): Tle[] {
   const lines = text.split(/\r?\n/).map((l) => l.trimEnd()).filter((l) => l.length);
@@ -58,9 +61,25 @@ export class TleStore {
 
   private async refresh(): Promise<void> {
     try {
-      const res = await fetch(this.url, { signal: AbortSignal.timeout(15000) });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const tles = parseTle(await res.text());
+      // TLE_URL may list several sources (comma-separated); merge them by
+      // catalog number so one failing source still leaves a usable sky.
+      const seen = new Set<string>();
+      const tles: Tle[] = [];
+      for (const url of this.url.split(",").map((u) => u.trim()).filter(Boolean)) {
+        try {
+          const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          for (const t of parseTle(await res.text())) {
+            const id = t.line1.slice(2, 7);
+            if (!seen.has(id)) {
+              seen.add(id);
+              tles.push(t);
+            }
+          }
+        } catch (err) {
+          console.error(`[tle] ${url}:`, err instanceof Error ? err.message : err);
+        }
+      }
       if (tles.length) {
         this.tles = tles;
         this.fetchedAt = Date.now();

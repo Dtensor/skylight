@@ -50,7 +50,7 @@ function norm360(d: number): number {
 }
 
 /** Horizontal coords of a fixed star from its RA/Dec and the local sidereal time. */
-function starAltAz(raDeg: number, decDeg: number, lstHours: number, latDeg: number) {
+export function starAltAz(raDeg: number, decDeg: number, lstHours: number, latDeg: number) {
   const ra = raDeg * D2R;
   const dec = decDeg * D2R;
   const lat = latDeg * D2R;

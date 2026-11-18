@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Skylight — Sky Window</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: none; }
+      canvas { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; display: block; }
+      #overlay { pointer-events: none; }
+      #fail { position: fixed; top: 0; left: 0; right: 0; bottom: 0; display: none; align-items: center; justify-content: center;
+              color: #9aa6bd; font: 3vh system-ui, sans-serif; text-align: center; padding: 8vw; }
+    </style>
+  </head>
+  <body>
+    <canvas id="gl"></canvas>
+    <canvas id="overlay"></canvas>
+    <div id="fail"></div>
+    <script type="module" src="/src/wall/main.ts"></script>
+  </body>
+</html>

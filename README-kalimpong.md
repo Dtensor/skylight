@@ -22,8 +22,8 @@ The clever part: most people need a special radio antenna to catch the planes.
 
 ## 2) 🙌 How YOU use it (do these by hand)
 
-- 🖥️ **See the planes (ceiling picture):** open `http://localhost:8771/`
-- 📱 **Change stuff from your phone:** open `http://192.168.0.105:8771/control`
+- 🖥️ **See the planes (ceiling picture):** open `http://localhost:21260/`
+- 📱 **Change stuff from your phone:** open `http://192.168.0.109:21260/control`
   (sliders for stars, Moon, how far out to look, colors; tap **"ISS → jump"** to
   preview when the Space Station flies over)
 - 📋 **Check it's awake:** `pm2 status` → find `skylight`, should say **online** in green
@@ -44,8 +44,8 @@ The clever part: most people need a special radio antenna to catch the planes.
 
 | Command / Link | What It Does | When I Use It |
 |---|---|---|
-| `http://localhost:8771/` 🖥️ | Shows the ceiling sky-window | When I want to watch planes |
-| `http://192.168.0.105:8771/control` 📱 | Phone remote: toggles & sliders | When I want to change how it looks |
+| `http://localhost:21260/` 🖥️ | Shows the ceiling sky-window | When I want to watch planes |
+| `http://192.168.0.109:21260/control` 📱 | Phone remote: toggles & sliders | When I want to change how it looks |
 | `pm2 status` 📋 | Checks if Skylight is awake | When something seems off |
 | `pm2 restart skylight` 🔄 | Restarts it fresh | If it's frozen or acting weird |
 | `pm2 logs skylight` 📜 | Shows what it's doing/saying | When I'm curious or hunting a bug |
@@ -78,3 +78,56 @@ That's the whole thing: **a self-running window to the real sky over Kalimpong.*
 - **Data:** free re-api failover chain; **no RTL-SDR needed** (`DATA_SOURCE=api`).
 - **Satellites:** ISS only, from `wheretheiss.at` (celestrak.org is blocked on this network).
 - **Service:** PM2 app `skylight` on port **8771** (`ecosystem.config.cjs`).
+
+
+## 🪟 Sky Window: the front-wall view (added 2026-11-18)
+
+### What we built
+The ceiling view is a map you lie under. The **Sky Window** is the opposite: the front
+wall becomes an opening in the house. You stand in Kalimpong and look up and out. The
+planes are little 3D aircraft with contrails by day and red, green and white lights by
+night. The mountains along the bottom are the real skyline, worked out from elevation
+data, so Kangchenjunga sits where it really is. The sun, moon, stars, planets and
+satellites are in their true places for this minute. Dark conifers stand close by, and
+planes pass behind them, which is what makes the sky feel far away.
+
+### How you use it
+- **On this Mac:** open `http://localhost:21260/wall`
+- **On the projector:** `~/claude_workspace/tools/parda/.venv/bin/python scripts/wall-on.py`
+  (`--status` only looks, `--off` goes back to HDMI). It will not take the wall while
+  something else is showing unless you add `--force`.
+- **Aim it from the phone:** `http://192.168.0.109:21260/control`, section
+  **Sky window (front wall)**: which way the wall faces, tilt, zoom, slow pan, labels,
+  clouds, trees.
+- **Keys** (keyboard on the display machine): arrows turn and tilt, `+ -` zoom,
+  `c` true geometry, `[ ]` distance squeeze, `p` slow pan, `l` labels,
+  `g` shadowed satellites, `k` clouds, `f` trees, `h` info line.
+- **Try a look without saving it:** add `?heading=340&pitch=20&t=180&cloud=40` to the
+  address (`t` = minutes from now).
+
+### What is real and what is helped
+| Thing | Real? |
+|---|---|
+| Which planes, their direction from you, height, heading, climb or descent | Real, live (about 1 s old) |
+| How far away the planes look | **Squeezed ÷10.** Real traffic here is 100 to 450 km off and would sit 0 to 5° above the horizon. Press `c` for true geometry. |
+| Plane size | Enlarged so you can see the shape |
+| Sun, moon and phase, stars, planets, satellites | Real positions. A satellite glows only when it is in sunlight and your sky is dark; the others are faint markers |
+| Mountain skyline | Real, from elevation tiles for the configured spot |
+| Clouds | Real amount and wind direction (open-meteo); the shapes are drawn |
+| Trees | Decoration, for depth |
+
+### What runs by itself
+- PM2 app `skylight` on port **21260** (port registry `skylight/ui`; the old 8771 belongs to something else now).
+- Planes: adsb.fi / adsb.lol / airplanes.live, tried in turn every second.
+- Satellites: CelesTrak "stations" + "visual" lists (about 166), refreshed every 6 hours.
+- Weather every 15 minutes. Elevation tiles are fetched once and kept in `server/data/terrain/`.
+
+### Gotchas
+- The skyline is computed for the exact latitude and longitude in the config. A generic
+  town coordinate can put a hill in front of you that your real house does not have. Set the
+  real spot (control panel or `POST /api/config` with `centerLat`, `centerLon`).
+- The projector's browser is an old Chrome 66 WebView. The build targets it
+  (`target: "chrome66"` in `web/vite.config.ts`, three.js pinned to 0.152); keep both.
+- PM2 must start the server as `node --import tsx` directly. Through the pnpm wrapper every
+  outgoing request failed with `ENOTFOUND`.
+- Screenshots for checking: `node scripts/wall-shot.mjs docs/wall "t=0" "t=240&heading=120"`.

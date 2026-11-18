@@ -6,6 +6,7 @@ import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { existsSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 import express from "express";
 import type { DataSource } from "@shared/index.js";
 import { ConfigStore } from "./config-store.js";
@@ -86,6 +87,53 @@ async function main(): Promise<void> {
   app.get("/api/aircraft", (_req, res) => res.json(poller.getSnapshot()));
   app.get("/api/status", (_req, res) => res.json(poller.getStatus()));
   app.get("/api/tle", async (_req, res) => res.json(await tleStore.get()));
+  // Terrain tiles (AWS Terrarium, keyless) for the wall view's real skyline.
+  // Proxied + cached on disk so the display device needs only this server.
+  app.get("/api/terrain/:z/:x/:y", async (req, res) => {
+    const [z, x, y] = [req.params.z, req.params.x, req.params.y].map(Number);
+    const ok =
+      [z, x, y].every((n) => Number.isInteger(n) && n >= 0) &&
+      z >= 6 && z <= 12 && x < 2 ** z && y < 2 ** z;
+    if (!ok) return res.status(400).json({ error: "bad tile" });
+    const file = resolve(DATA_DIR, "terrain", `${z}-${x}-${y}.png`);
+    try {
+      if (!existsSync(file)) {
+        const r = await fetch(
+          `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`,
+          { signal: AbortSignal.timeout(30000) },
+        );
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        await mkdir(dirname(file), { recursive: true });
+        await writeFile(file, Buffer.from(await r.arrayBuffer()));
+      }
+      res.set("Cache-Control", "public, max-age=2592000").sendFile(file);
+    } catch (err) {
+      const cause = err instanceof Error ? (err.cause as { code?: string } | undefined)?.code : undefined;
+      res.status(502).json({ error: err instanceof Error ? err.message : "fetch failed", cause });
+    }
+  });
+
+  // Current cloud cover + wind for the wall's cloud layer (open-meteo, keyless).
+  let wx: { at: number; body: unknown } | null = null;
+  app.get("/api/weather", async (_req, res) => {
+    if (!wx || Date.now() - wx.at > 15 * 60_000) {
+      const c = store.get();
+      try {
+        const r = await fetch(
+          `https://api.open-meteo.com/v1/forecast?latitude=${c.centerLat}&longitude=${c.centerLon}` +
+            "&current=cloud_cover,wind_speed_10m,wind_direction_10m,temperature_2m",
+          { signal: AbortSignal.timeout(30000) },
+        );
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        wx = { at: Date.now(), body: ((await r.json()) as { current?: unknown }).current ?? {} };
+      } catch (err) {
+        console.error("[weather]", err instanceof Error ? err.message : err);
+        if (!wx) return res.status(502).json({ error: "weather unavailable" });
+      }
+    }
+    res.json(wx!.body);
+  });
+
   app.post("/api/source", (req, res) => {
     const s = req.body?.source;
     if (s !== "radio" && s !== "api") {
@@ -99,6 +147,7 @@ async function main(): Promise<void> {
   if (existsSync(WEB_DIST)) {
     app.use(express.static(WEB_DIST));
     app.get("/control", (_req, res) => res.sendFile(resolve(WEB_DIST, "control.html")));
+    app.get("/wall", (_req, res) => res.sendFile(resolve(WEB_DIST, "wall.html")));
     app.get("/", (_req, res) => res.sendFile(resolve(WEB_DIST, "index.html")));
   } else {
     app.get("/", (_req, res) =>

@@ -108,6 +108,26 @@ export interface Config {
   showDestArc: boolean;
   /** Add destination local time + distance-to-go to labels. */
   showRouteDetail: boolean;
+
+  // --- front-wall "sky window" view (/wall) ---
+  /** Compass bearing the wall window looks toward, degrees from North. */
+  wallHeadingDeg: number;
+  /** How far the view is tilted up from level, degrees. */
+  wallPitchDeg: number;
+  /** Vertical field of view, degrees. */
+  wallFovDeg: number;
+  /** Ground-distance compression for aircraft (1 = true geometry). */
+  wallCompress: number;
+  /** Aircraft fetch radius for the wall, nautical miles (API max 250). */
+  wallRangeNm: number;
+  /** "fixed" holds the heading; "sweep" pans slowly round the compass. */
+  wallPan: "fixed" | "sweep";
+  wallLabels: boolean;
+  /** Show satellites that are up but not sunlit, as faint markers. */
+  wallGhostSats: boolean;
+  wallClouds: boolean;
+  /** Foreground conifers that aircraft pass behind (depth cue). */
+  wallForeground: boolean;
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -183,6 +203,17 @@ export const DEFAULT_CONFIG: Config = {
 
   showDestArc: true,
   showRouteDetail: true,
+
+  wallHeadingDeg: 215,
+  wallPitchDeg: 24,
+  wallFovDeg: 60,
+  wallCompress: 10,
+  wallRangeNm: 250,
+  wallPan: "fixed",
+  wallLabels: true,
+  wallGhostSats: true,
+  wallClouds: true,
+  wallForeground: true,
 };
 
 /**

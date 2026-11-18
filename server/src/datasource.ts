@@ -213,7 +213,11 @@ export class Poller {
 
   private buildApiUrl(template: string): string {
     const c = this.o.getConfig();
-    const r = Math.min(250, Math.ceil(c.radiusMiles * NM_PER_MILE) + 1);
+    // The wall view looks much further out than the ceiling; fetch the wider.
+    const r = Math.min(
+      250,
+      Math.max(Math.ceil(c.radiusMiles * NM_PER_MILE) + 1, c.wallRangeNm ?? 0),
+    );
     return template
       .replace("{lat}", String(c.centerLat))
       .replace("{lon}", String(c.centerLon))

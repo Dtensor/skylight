@@ -74,6 +74,40 @@ export function Control() {
       </header>
 
       <main>
+        <Section title="Sky window (front wall)">
+          <Row label="Facing" hint="compass bearing the wall looks toward">
+            <Slider value={cfg.wallHeadingDeg} min={0} max={355} step={5} unit="°"
+              onChange={(v) => set({ wallHeadingDeg: v })} />
+          </Row>
+          <Row label="Tilt up">
+            <Slider value={cfg.wallPitchDeg} min={0} max={80} step={2} unit="°"
+              onChange={(v) => set({ wallPitchDeg: v })} />
+          </Row>
+          <Row label="Field of view">
+            <Slider value={cfg.wallFovDeg} min={25} max={95} step={1} unit="°"
+              onChange={(v) => set({ wallFovDeg: v })} />
+          </Row>
+          <Row label="Aircraft distance" hint="1 = true geometry; higher lifts far traffic into view">
+            <Slider value={cfg.wallCompress} min={1} max={30} step={1} unit="÷"
+              onChange={(v) => set({ wallCompress: v })} />
+          </Row>
+          <Row label="Slow pan round the compass">
+            <Toggle value={cfg.wallPan === "sweep"} onChange={(v) => set({ wallPan: v ? "sweep" : "fixed" })} />
+          </Row>
+          <Row label="Labels">
+            <Toggle value={cfg.wallLabels} onChange={(v) => set({ wallLabels: v })} />
+          </Row>
+          <Row label="Satellites in shadow" hint="faint markers for ones the eye cannot see">
+            <Toggle value={cfg.wallGhostSats} onChange={(v) => set({ wallGhostSats: v })} />
+          </Row>
+          <Row label="Clouds" hint="from live cloud cover">
+            <Toggle value={cfg.wallClouds} onChange={(v) => set({ wallClouds: v })} />
+          </Row>
+          <Row label="Foreground trees">
+            <Toggle value={cfg.wallForeground} onChange={(v) => set({ wallForeground: v })} />
+          </Row>
+        </Section>
+
         <Section title="Calibration">
           <Row label="Rotation" hint="align field to ceiling">
             <Slider value={cfg.rotationDeg} min={0} max={355} step={5} unit="°"
