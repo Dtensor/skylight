@@ -28,6 +28,25 @@ function kindOf(type: string | undefined, category: string | undefined): Kind {
   return "jet";
 }
 
+// Tail colours of the airlines that actually cross this sky (ICAO prefix).
+const LIVERY: Record<string, number> = {
+  IGO: 0x1d2f9c, AIC: 0xc8102e, AXB: 0xe2521d, AKJ: 0xff6a13, VTI: 0x5b2a6e, SEJ: 0xd81f26,
+  THA: 0x5a2d82, BOX: 0xcc1f2a, MXD: 0xb01e2d, DRK: 0xf2a900, BTN: 0xe87722, UAE: 0xd71921,
+  QTR: 0x5c0632, SIA: 0xf0ab00, CPA: 0x00645a, BBC: 0x006a4e, UBG: 0x1b3f8b, RNA: 0xc8102e,
+  BHA: 0x1d4f91, CES: 0x1e3a8a, CCA: 0xc8102e, CSN: 0x0072c6, KLM: 0x00a1de, DLH: 0x0a1d3d,
+  BAW: 0x1d2b5e, FDX: 0x4d148c, UPS: 0x5a3a1a, ETD: 0xb8935a, THY: 0xc8102e, SVA: 0x00664f,
+  MAS: 0x1b3a7a, AXM: 0xe1251b, TGW: 0xf5c400, KAL: 0x7fb8d8, ANA: 0x13448f, JAL: 0xc8102e,
+  CAL: 0xd98cb3, EVA: 0x00703c, HVN: 0x00607a, VJC: 0xe4002b, AIQ: 0xe1251b, SLK: 0x00a0af,
+};
+
+function tailColor(flight: string | undefined, hex: string): number {
+  const known = LIVERY[(flight ?? "").slice(0, 3).toUpperCase()];
+  if (known != null) return known;
+  let h = 0;
+  for (const ch of (flight ?? hex).slice(0, 3)) h = (h * 37 + ch.charCodeAt(0)) >>> 0;
+  return new THREE.Color().setHSL((h % 360) / 360, 0.55, 0.42).getHex();
+}
+
 /** Thin flat panel from an outline given as [x, z] pairs, lying at height y. */
 function panel(pts: [number, number][], y: number, thick: number): THREE.BufferGeometry {
   const s = new THREE.Shape(pts.map(([x, z]) => new THREE.Vector2(x, z)));
@@ -41,8 +60,18 @@ function mirrored(pts: [number, number][]): [number, number][] {
   return pts.map(([x, z]) => [-x, z] as [number, number]).reverse();
 }
 
+function fuse(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  const merged = mergeGeometries(parts.map((p) => {
+    const q = p.index ? p.toNonIndexed() : p;
+    q.deleteAttribute("uv");
+    return q;
+  }));
+  merged.computeVertexNormals();
+  return merged;
+}
+
 /** Unit-length airframe: nose toward -Z, up +Y, right wing toward +X. */
-function buildModel(kind: Kind): THREE.BufferGeometry {
+function buildModel(kind: Kind): { body: THREE.BufferGeometry; fin: THREE.BufferGeometry; cabin: THREE.BufferGeometry } {
   const parts: THREE.BufferGeometry[] = [];
   const r = kind === "wide" ? 0.062 : kind === "prop" ? 0.05 : 0.054;
   const body = new THREE.CylinderGeometry(r, r, 0.66, 14);
@@ -73,7 +102,6 @@ function buildModel(kind: Kind): THREE.BufferGeometry {
   );
   fin.rotateY(-Math.PI / 2); // outline x -> world z
   fin.translate(0.006, r * 0.5, 0);
-  parts.push(fin);
 
   for (let i = 0; i < 2; i++) {
     const side = i % 2 ? -1 : 1;
@@ -89,13 +117,14 @@ function buildModel(kind: Kind): THREE.BufferGeometry {
       parts.push(disc);
     }
   }
-  const merged = mergeGeometries(parts.map((p) => {
-    const q = p.index ? p.toNonIndexed() : p;
-    q.deleteAttribute("uv");
-    return q;
-  }));
-  merged.computeVertexNormals();
-  return merged;
+  // Lit cabin windows: a thin warm strip just proud of each side of the fuselage.
+  const len = kind === "prop" ? 0.36 : 0.5;
+  const strips = [-1, 1].map((side) => {
+    const b = new THREE.BoxGeometry(0.003, r * 0.2, len);
+    b.translate(side * (r * 0.97 + 0.002), r * 0.28, -0.03);
+    return b;
+  });
+  return { body: fuse(parts), fin: fuse([fin]), cabin: fuse(strips) };
 }
 
 const TRAIL_VERT = /* glsl */ `
@@ -137,6 +166,7 @@ function lightTexture(): THREE.CanvasTexture {
 interface Craft {
   ac: Aircraft;
   group: THREE.Group;
+  finMat: THREE.MeshStandardMaterial;
   lights: { red: THREE.Sprite; green: THREE.Sprite; tail: THREE.Sprite; beacon: THREE.Sprite; strobeL: THREE.Sprite; strobeR: THREE.Sprite; landing: THREE.Sprite };
   trail: THREE.Mesh;
   /** Smoothed real position, km east/north of the observer, and altitude km. */
@@ -162,11 +192,15 @@ export interface CraftView {
   el: number;
   az: number;
   alpha: number;
+  /** Drawn length of the model as an angle, degrees (for the close-up). */
+  sizeDeg: number;
 }
 
 export class Fleet {
   private crafts = new Map<string, Craft>();
-  private geo: Record<Kind, THREE.BufferGeometry>;
+  private geo: Record<Kind, ReturnType<typeof buildModel>>;
+  private cabinMat = new THREE.MeshBasicMaterial({ color: 0xffd49a, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
+  private ambient = 0.1;
   private bodyMat = new THREE.MeshStandardMaterial({ color: 0xe9edf2, roughness: 0.55, metalness: 0.25, side: THREE.DoubleSide, transparent: true });
   private lightTex = lightTexture();
   private trailUniforms = { uColor: { value: new THREE.Color(1, 1, 1) }, uOpacity: { value: 0.8 } };
@@ -196,9 +230,14 @@ export class Fleet {
   private spawn(ac: Aircraft, now: number): Craft {
     const kind = kindOf(ac.typeCode, ac.category);
     const group = new THREE.Group();
-    const mesh = new THREE.Mesh(this.geo[kind], this.bodyMat);
+    const mesh = new THREE.Mesh(this.geo[kind].body, this.bodyMat);
     mesh.renderOrder = 6;
-    group.add(mesh);
+    const finMat = new THREE.MeshStandardMaterial({ color: tailColor(ac.flight, ac.hex), roughness: 0.6, metalness: 0.1, side: THREE.DoubleSide, transparent: true });
+    const fin = new THREE.Mesh(this.geo[kind].fin, finMat);
+    fin.renderOrder = 6.1;
+    const cabin = new THREE.Mesh(this.geo[kind].cabin, this.cabinMat);
+    cabin.renderOrder = 6.2;
+    group.add(mesh, fin, cabin);
     const L = {
       red: this.sprite(0xff2a1e), green: this.sprite(0x24ff62), tail: this.sprite(0xffffff),
       beacon: this.sprite(0xff3020), strobeL: this.sprite(0xffffff), strobeR: this.sprite(0xffffff),
@@ -236,7 +275,7 @@ export class Fleet {
     let h = 0;
     for (const ch of ac.hex) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
     const c: Craft = {
-      ac, group, lights: L, trail,
+      ac, group, finMat, lights: L, trail,
       e: 0, n: 0, alt: 0, te: 0, tn: 0, talt: 0, ve: 0, vn: 0, valt: 0,
       heading: ac.track ?? 0, crumbs: [], lastSeen: now, life: 0, phase: (h % 1000) / 1000,
     };
@@ -286,6 +325,11 @@ export class Fleet {
     }
   }
 
+  /** The close-up is a light-gathering view: lift the ambient while it draws. */
+  boost(on: boolean): void {
+    this.hemi.intensity = on ? Math.max(this.ambient, 0.95) : this.ambient;
+  }
+
   /** Real (e, n, alt) -> scene position. Ground distance is divided by k. */
   private place(e: number, n: number, alt: number, k: number, obsKm: number, out: THREE.Vector3): THREE.Vector3 {
     const r = Math.hypot(e, n) / k;
@@ -301,7 +345,9 @@ export class Fleet {
     this.sun.position.copy(o.sunDir).multiplyScalar(100);
     this.sun.intensity = 2.6 * o.day;
     this.sun.color.setRGB(1, 0.55 + 0.45 * Math.min(1, o.sunDir.y * 4 + 0.2), 0.3 + 0.7 * Math.min(1, o.sunDir.y * 4));
-    this.hemi.intensity = 0.05 + 0.05 * o.moonLit + 1.0 * o.day + 0.25 * o.twilight;
+    this.ambient = 0.07 + 0.09 * o.moonLit + 1.0 * o.day + 0.25 * o.twilight;
+    this.hemi.intensity = this.ambient;
+    this.cabinMat.opacity = 0.95 * night;
     // Contrails: white by day, catching orange at dusk, faint and grey at night.
     this.trailUniforms.uColor.value.setRGB(
       0.16 + 0.84 * o.day + 0.5 * o.twilight,
@@ -321,6 +367,7 @@ export class Fleet {
       if (age > o.staleSec + 6 && c.life < 0.02) {
         this.scene.remove(c.group, c.trail);
         c.trail.geometry.dispose();
+        c.finMat.dispose();
         this.crafts.delete(hex);
         continue;
       }
@@ -340,7 +387,7 @@ export class Fleet {
       this.place(c.e, c.n, c.alt, k, o.observerKm, p);
       const dist = p.length();
       // Exaggerated but still perspective-ish: nearer aircraft are bigger.
-      const angDeg = Math.max(1.5, Math.min(5.5, 3.1 * Math.sqrt(14 / Math.max(dist, 1.5)))) * (c.group.userData.scaleMul as number);
+      const angDeg = Math.max(2.0, Math.min(7.0, 3.6 * Math.sqrt(14 / Math.max(dist, 1.5)))) * (c.group.userData.scaleMul as number);
       const scale = dist * Math.tan(angDeg * D2R);
       c.group.position.copy(p);
       c.group.scale.setScalar(scale);
@@ -355,11 +402,11 @@ export class Fleet {
       const st = t % 1.25;
       const strobe = st < 0.05 || (st > 0.14 && st < 0.19) ? 1 : 0;
       const navA = (0.25 + 0.75 * night) * c.life;
-      const s0 = 0.10 + 0.10 * night;
+      const s0 = 0.12 + 0.15 * night;
       for (const [sp, a, sz] of [
         [L.red, navA, s0], [L.green, navA, s0], [L.tail, navA * 0.8, s0 * 0.8],
-        [L.beacon, beacon * c.life, s0 * 1.6], [L.strobeL, strobe * c.life, s0 * 2.2], [L.strobeR, strobe * c.life, s0 * 2.2],
-        [L.landing, (c.alt - o.observerKm < 3 ? 1 : 0) * c.life, s0 * 2.6],
+        [L.beacon, beacon * c.life, s0 * 1.6], [L.strobeL, strobe * c.life, s0 * 1.7], [L.strobeR, strobe * c.life, s0 * 1.7],
+        [L.landing, (c.alt - o.observerKm < 3 ? 1 : 0) * c.life, s0 * 1.5],
       ] as [THREE.Sprite, number, number][]) {
         sp.material.opacity = a;
         sp.scale.setScalar(sz);
@@ -400,6 +447,7 @@ export class Fleet {
           el: Math.asin(Math.max(-1, Math.min(1, p.y / dist))) / D2R,
           az: (Math.atan2(p.x, -p.z) / D2R + 360) % 360,
           alpha: c.life,
+          sizeDeg: angDeg,
         });
       }
     }

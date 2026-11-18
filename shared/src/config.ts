@@ -128,6 +128,22 @@ export interface Config {
   wallClouds: boolean;
   /** Foreground conifers that aircraft pass behind (depth cue). */
   wallForeground: boolean;
+  /** Sky window: ambient sound and aircraft rumble. */
+  wallSound: boolean;
+  /** Sky window: master volume, 0..1. */
+  wallVolume: number;
+  /** Sky window: the close-up panel with the aircraft card. */
+  wallScope: boolean;
+  /** Sky window: drifting "right now" notes. */
+  wallMoments: boolean;
+  /** Sky window: reconstructed radio calls (text, and voice when sound is on). */
+  wallRadio: boolean;
+  /** Speak the radio calls and cabin announcements aloud (softly), not just show them. */
+  wallSpeak: boolean;
+  /** Sky window: the name of where you are lying, for the info line and radio calls. */
+  wallPlaceName: string;
+  /** Size of all text on the wall; 1 suits a desk, about 1.5 suits a bed a few metres away. */
+  wallTextScale: number;
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -214,6 +230,14 @@ export const DEFAULT_CONFIG: Config = {
   wallGhostSats: true,
   wallClouds: true,
   wallForeground: true,
+  wallSound: true,
+  wallVolume: 0.6,
+  wallScope: true,
+  wallMoments: true,
+  wallRadio: true,
+  wallSpeak: true,
+  wallPlaceName: "Kalimpong",
+  wallTextScale: 1.45,
 };
 
 /**

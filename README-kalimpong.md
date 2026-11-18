@@ -131,3 +131,74 @@ planes pass behind them, which is what makes the sky feel far away.
 - PM2 must start the server as `node --import tsx` directly. Through the pnpm wrapper every
   outgoing request failed with `ENOTFOUND`.
 - Screenshots for checking: `node scripts/wall-shot.mjs docs/wall "t=0" "t=240&heading=120"`.
+
+## Sky Window as an app, with sound (added 2026-11-18)
+
+The front wall no longer runs in the projector's browser. `android/` holds a tiny
+app (one fullscreen WebView: no bars, screen kept awake, sound allowed to start
+by itself). Build it with `android/build.sh` (needs JDK 17, Android build-tools
+34.0.0 and platform 28 under `~/Library/Android/sdk`); output is
+`android/out/skywindow.apk`.
+
+```
+PY=/Users/King_1/claude_workspace/tools/parda/.venv/bin/python
+$PY scripts/wall-on.py                 # show the sky (installs the app if missing)
+$PY scripts/wall-on.py --install       # reinstall after rebuilding the app
+$PY scripts/wall-on.py --place delhi   # stand in Green Park, Delhi (also moves the ceiling view)
+$PY scripts/wall-on.py --place kalimpong
+$PY scripts/wall-on.py --off           # back to the HDMI viewer
+```
+
+What is real and what is ambience:
+
+- Real: aircraft positions, types, routes, liveries by airline; sun, moon, planets,
+  stars, Milky Way position; satellites; the skyline; cloud cover and wind.
+- Ambience (simulated): meteors, birds and the owl, the lamps on the hills (seeded
+  clusters, not surveyed buildings), and every sound. Aircraft rumble follows the
+  same distance compression as the picture; real jets that far away are silent.
+
+Keys on the wall page: `m` sound, `s` close-up panel, `i` right-now notes (plus the
+earlier ones). The same switches and a volume slider are in `/control`.
+The page adapts to the display: it drops resolution if it measures under 22 fps.
+
+Satellites: CelesTrak blocks callers who ask too often, so `server/src/tle.ts`
+also asks a second supplier and a refresh can only add or update, never shrink.
+
+## Lie down anywhere, and sit in four seats
+
+```
+PY=/Users/King_1/claude_workspace/tools/parda/.venv/bin/python
+$PY scripts/wall-on.py --place "Reykjavik"     # any place name on Earth
+$PY scripts/wall-on.py --place "35.55,139.78"  # or latitude,longitude
+$PY scripts/wall-on.py --place kalimpong       # home (presets: kalimpong, delhi)
+```
+
+A name is looked up (open-meteo geocoding, no key), the wall is moved there, and
+the distance scaling is chosen from the traffic actually found: busy sky = true
+geometry at 90 nm, empty sky = 250 nm squeezed ÷10. The bottom line shows the
+place and its own local clock. Pine silhouettes appear only above 900 m.
+
+What is on the wall, and how true each part is:
+
+| Part | Where it comes from |
+|---|---|
+| Aircraft, heights, speeds, routes | Live (airplanes.live, adsb.lol, adsb.fi) |
+| **On the radio** (bottom left, green) | *Rebuilt*, not recorded. Each exchange is triggered by something the aircraft measurably did (left its level, levelled off, turned, changed radar code, came down final approach) and uses only observed numbers, in standard radio wording. Spoken by this Mac's own voice through a radio filter. |
+| **In the cabin** (bottom left, amber) | The customary announcement for that moment (seatbelt sign off at 10,000 ft, "prepare the cabin for landing", "seats for landing"), with a two-note chime. |
+| **Four seats** (top left) | Window seat, cabin crew, flight deck, radar room: what customarily happens at this phase of this flight. Phase comes from live height, climb/descent and distance to each end of the route. Scenes are written, not reported. |
+| **Our sky remembers** | Only what this server has itself seen: each aircraft and flight, per place, per day (`server/data/sightings.json`). Starts empty on 18 Nov 2026 and grows; "regular" lines need 3+ days. |
+| **Waiting at the other end / the wind it is in** | Live weather and local time at the destination, and the 250 hPa wind at the aircraft (open-meteo). |
+| State of the routes, who is flying, lore | Written from general knowledge, dated where the fact has a date. Not fetched tonight, not source-checked line by line. |
+
+Not available, by choice or by fact:
+
+- **Real ATC audio.** LiveATC forbids third-party use of its streams, and no other
+  permitted live source was found, so every place gets the rebuilt radio.
+- **Who the pilots are.** Crew names are not public. The "who is flying" lines
+  say what is true of any airline crew instead.
+- **Per-airframe history** (age, past owners). The free lookups tried returned
+  nothing useful; the sky's own memory fills this in over time.
+
+Keys on the wall: `r` radio and cabin on/off, `v` spoken voice on/off (also on
+the control page). Server endpoints: `/api/say?t=`, `/api/seen?hex=&flight=`,
+`/api/point?lat=&lon=`.

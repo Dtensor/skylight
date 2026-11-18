@@ -14,6 +14,9 @@ import { RouteEnricher } from "./enrich/routes.js";
 import { Poller } from "./datasource.js";
 import { Hub } from "./hub.js";
 import { TleStore } from "./tle.js";
+import { Memory } from "./memory.js";
+import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = resolve(__dirname, "../data");
@@ -79,6 +82,112 @@ async function main(): Promise<void> {
     onStatus: (status) => hub.broadcastStatus(status),
   });
 
+  // The sky's memory: note who is overhead once a minute.
+  const memory = new Memory(resolve(DATA_DIR, "sightings.json"));
+  await memory.load();
+  setInterval(() => {
+    const c = store.get();
+    memory.note(c.centerLat, c.centerLon, poller.getSnapshot().aircraft);
+  }, 60_000).unref?.();
+  for (const sig of ["SIGINT", "SIGTERM"] as const) process.once(sig, () => void memory.save().then(() => process.exit(0)));
+
+  app.get("/api/seen", (req, res) => {
+    const c = store.get();
+    res.json(memory.get(c.centerLat, c.centerLon, String(req.query.hex ?? "").slice(0, 8), String(req.query.flight ?? "").slice(0, 10)));
+  });
+
+  // Conditions at any point on Earth right now: local clock, ground weather,
+  // and the wind at cruising height (250 hPa, about 10.5 km). open-meteo, keyless.
+  const points = new Map<string, { at: number; body: unknown }>();
+  app.get("/api/point", async (req, res) => {
+    const lat = Number(req.query.lat);
+    const lon = Number(req.query.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+      return res.status(400).json({ error: "bad coordinates" });
+    }
+    const key = `${lat.toFixed(1)},${lon.toFixed(1)}`;
+    const hit = points.get(key);
+    if (hit && Date.now() - hit.at < 20 * 60_000) return res.json(hit.body);
+    try {
+      const r = await fetch(
+        `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(2)}&longitude=${lon.toFixed(2)}` +
+          "&current=temperature_2m,weather_code,wind_speed_10m,wind_speed_250hPa,wind_direction_250hPa&timezone=auto",
+        { signal: AbortSignal.timeout(30000) },
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = (await r.json()) as { current?: Record<string, unknown>; timezone?: string };
+      const body = { ...(j.current ?? {}), timezone: j.timezone };
+      if (points.size > 400) points.clear();
+      points.set(key, { at: Date.now(), body });
+      res.json(body);
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : "unavailable" });
+    }
+  });
+
+  // Speech for the reconstructed radio calls and cabin announcements, made on
+  // this Mac: AudioSmith's local voices (loopback API) when the app is running,
+  // the system voice otherwise. Text is restricted to plain words.
+  const SAY_DIR = resolve(DATA_DIR, "say");
+  const AUDIOSMITH = process.env.AUDIOSMITH_URL ?? "http://127.0.0.1:20711";
+  const VOICES = new Set(["am_adam", "am_michael", "am_puck", "af_heart", "af_bella", "af_nicole", "af_sarah", "af_sky", "bm_george", "bm_lewis", "bf_emma", "bf_isabella"]);
+  // Voices designed in AudioSmith for this wall: slower to make (several
+  // seconds a line) but with a character the stock voices lack.
+  const DESIGNED: Record<string, { model: string; voice: string }> = {
+    gruff: { model: "qwen3-tts-1.7b-voicedesign-4bit", voice: "01M7QZTH195QGC0P8AHX9AP3F5" }, // "Delhi Control Gruff"
+  };
+  /** A streamed WAV may carry placeholder lengths; old browsers need the real ones. */
+  const fixWav = (buf: Buffer): Buffer => {
+    const at = buf.indexOf("data", 12, "latin1");
+    if (buf.length < 44 || buf.toString("latin1", 0, 4) !== "RIFF" || at < 0) return buf;
+    buf.writeUInt32LE(buf.length - 8, 4);
+    buf.writeUInt32LE(buf.length - at - 8, at + 4);
+    return buf;
+  };
+  app.get("/api/say", async (req, res) => {
+    const text = String(req.query.t ?? "");
+    const voice = String(req.query.v ?? "");
+    const fast = req.query.fast === "1";
+    if (!/^[A-Za-z0-9 ,.'-]{1,240}$/.test(text)) return res.status(400).json({ error: "bad text" });
+    if (voice && !VOICES.has(voice) && !DESIGNED[voice]) return res.status(400).json({ error: "unknown voice" });
+    const name = (v: string) => resolve(SAY_DIR, createHash("sha1").update(`${v}|${fast ? 1 : 0}|${text}`).digest("hex") + ".wav");
+    let file = name(voice);
+    if (!existsSync(file)) {
+      await mkdir(SAY_DIR, { recursive: true });
+      let made = false;
+      if (voice) {
+        try {
+          const r = await fetch(`${AUDIOSMITH}/v1/audio/speech`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-AudioSmith-Request": "1" },
+            body: JSON.stringify(
+              DESIGNED[voice]
+                ? { ...DESIGNED[voice], input: text, response_format: "wav" }
+                : { model: "kokoro-82m-bf16", voice, input: text, response_format: "wav", speed: fast ? 1.14 : 0.98 },
+            ),
+            signal: AbortSignal.timeout(60000),
+          });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          await writeFile(file, fixWav(Buffer.from(await r.arrayBuffer())));
+          made = true;
+        } catch (err) {
+          console.error("[say] AudioSmith unavailable, using the system voice:", err instanceof Error ? err.message : err);
+        }
+      }
+      if (!made) {
+        file = name("");
+        if (!existsSync(file)) {
+          const ok = await new Promise<boolean>((done) => {
+            execFile("/usr/bin/say", ["-o", file, "--data-format=LEI16@16000", "-r", "188", text], { timeout: 30000 }, (err) => done(!err));
+          });
+          if (!ok) return res.status(503).json({ error: "speech unavailable on this host" });
+        }
+      }
+    }
+    res.set("Cache-Control", "public, max-age=604800");
+    res.sendFile(file);
+  });
+
   // --- REST API (handy for debugging + non-WS clients) ---
   app.get("/api/health", (_req, res) => res.json({ ok: true }));
   app.get("/api/config", (_req, res) => res.json(store.get()));
@@ -114,10 +223,12 @@ async function main(): Promise<void> {
   });
 
   // Current cloud cover + wind for the wall's cloud layer (open-meteo, keyless).
-  let wx: { at: number; body: unknown } | null = null;
+  let wx: { at: number; body: unknown; key: string } | null = null;
   app.get("/api/weather", async (_req, res) => {
+    const c = store.get();
+    const key = `${c.centerLat},${c.centerLon}`;
+    if (wx && wx.key !== key) wx = null; // we have moved: yesterday's sky is someone else's
     if (!wx || Date.now() - wx.at > 15 * 60_000) {
-      const c = store.get();
       try {
         const r = await fetch(
           `https://api.open-meteo.com/v1/forecast?latitude=${c.centerLat}&longitude=${c.centerLon}` +
@@ -125,7 +236,7 @@ async function main(): Promise<void> {
           { signal: AbortSignal.timeout(30000) },
         );
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        wx = { at: Date.now(), body: ((await r.json()) as { current?: unknown }).current ?? {} };
+        wx = { at: Date.now(), key, body: ((await r.json()) as { current?: unknown }).current ?? {} };
       } catch (err) {
         console.error("[weather]", err instanceof Error ? err.message : err);
         if (!wx) return res.status(502).json({ error: "weather unavailable" });

@@ -15,9 +15,26 @@ const DEFAULT_URL = [
   "https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=tle",
   "https://celestrak.org/NORAD/elements/gp.php?GROUP=visual&FORMAT=tle",
   "https://api.wheretheiss.at/v1/satellites/25544/tles?format=text",
+  // Second supplier for when CelesTrak is unreachable (it blocks callers who
+  // ask too often): the large, bright objects a naked eye actually picks out —
+  // spent rocket stages, the Chinese station, Hubble.
+  ...["SL-16 R/B", "SL-8 R/B", "SL-14 R/B", "CZ-4", "CZ-2C R/B", "H-2A R/B", "CSS", "HST"].map(
+    (q) => `https://tle.ivanstanojevic.me/api/tle/?page-size=100&search=${encodeURIComponent(q)}`,
+  ),
 ].join(",");
 
 function parseTle(text: string): Tle[] {
+  // JSON suppliers answer { member: [{ name, line1, line2 }] }.
+  if (text.trimStart().startsWith("{")) {
+    try {
+      const j = JSON.parse(text) as { member?: { name?: string; line1?: string; line2?: string }[] };
+      return (j.member ?? [])
+        .filter((m) => typeof m.line1 === "string" && typeof m.line2 === "string" && m.line1.startsWith("1 ") && m.line2.startsWith("2 "))
+        .map((m) => ({ name: String(m.name ?? "SAT").trim(), line1: m.line1!, line2: m.line2! }));
+    } catch {
+      return [];
+    }
+  }
   const lines = text.split(/\r?\n/).map((l) => l.trimEnd()).filter((l) => l.length);
   const out: Tle[] = [];
   for (let i = 0; i < lines.length - 1; i++) {
@@ -50,7 +67,8 @@ export class TleStore {
       /* first run */
     }
     // Refresh on startup (non-blocking) and then on a daily timer.
-    void this.refresh();
+    // Not on every restart: CelesTrak blocks callers that ask too often.
+    if (Date.now() - this.fetchedAt > 2 * 3600_000 || this.tles.length < 20) void this.refresh();
     setInterval(() => void this.refresh(), 6 * 3600_000).unref?.();
   }
 
@@ -81,6 +99,16 @@ export class TleStore {
         }
       }
       if (tles.length) {
+        // A partial answer (one source refusing, as CelesTrak does when asked
+        // too often) must never shrink the sky: keep what the fresh set lacks.
+        // Element sets stay usable for days.
+        for (const old of this.tles) {
+          const id = old.line1.slice(2, 7);
+          if (!seen.has(id)) {
+            seen.add(id);
+            tles.push(old);
+          }
+        }
         this.tles = tles;
         this.fetchedAt = Date.now();
         await mkdir(dirname(this.cachePath), { recursive: true });

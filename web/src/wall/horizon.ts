@@ -47,6 +47,42 @@ void main() {
   gl_FragColor = vec4(col, 1.0);
 }`;
 
+const LAMP_VERT = /* glsl */ `
+attribute float aSeed;
+attribute float aWarm;
+uniform float uTime;
+uniform float uScale;
+uniform float uNight;
+varying float vA;
+varying float vWarm;
+void main() {
+  vWarm = aWarm;
+  // Distant lamps shimmer through warm air; a few flicker off now and then.
+  float tw = 0.72 + 0.28 * sin(uTime * (1.5 + aSeed * 5.0) + aSeed * 90.0);
+  float on = step(0.06, fract(aSeed * 7.3 + floor(uTime / 40.0 + aSeed * 9.0) * 0.37));
+  vA = tw * on * uNight;
+  gl_PointSize = (4.0 + 7.0 * pow(fract(aSeed * 13.7), 2.0)) * uScale;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}`;
+
+const LAMP_FRAG = /* glsl */ `
+varying float vA;
+varying float vWarm;
+void main() {
+  float r = length(gl_PointCoord - 0.5) * 2.0;
+  float a = smoothstep(1.0, 0.0, r);
+  vec3 col = mix(vec3(0.86, 0.92, 1.0), vec3(1.0, 0.66, 0.30), vWarm);
+  gl_FragColor = vec4(col, (pow(a, 3.0) * 0.55 + smoothstep(0.35, 0.0, r)) * vA);
+}`;
+
+function lampRng(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a * 1664525 + 1013904223) >>> 0;
+    return a / 4294967296;
+  };
+}
+
 function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((ok, bad) => {
     const im = new Image();
@@ -65,6 +101,7 @@ export interface HorizonInfo {
 
 export class Horizon {
   readonly uniforms = { uDay: { value: 0 }, uTwilight: { value: 0 }, uMoonLit: { value: 0 } };
+  readonly lampUniforms = { uTime: { value: 0 }, uScale: { value: 1 }, uNight: { value: 0 } };
   info: HorizonInfo | null = null;
   private skyline: Float32Array | null = null;
 
@@ -122,6 +159,61 @@ export class Horizon {
     m.frustumCulled = false;
     m.name = `horizon-${band}${flat ? "-flat" : ""}`;
     return m;
+  }
+
+  /**
+   * Lamps of the hill towns: clustered points on the near and middle slopes,
+   * only where that slope is actually in view. Placement is suggestive (seeded
+   * clusters), not a survey of real buildings.
+   */
+  private lamps(els: Float32Array[]): THREE.Points {
+    const r = lampRng(734);
+    const pos: number[] = [];
+    const seed: number[] = [];
+    const warm: number[] = [];
+    // Settlement density by bearing: a few broad towns, many dark gaps.
+    const dens = new Float32Array(N_AZ);
+    for (let c = 0; c < 16; c++) {
+      const centre = r() * N_AZ;
+      const width = 6 + r() * 30;
+      const weight = 0.3 + r() * r() * 1.6;
+      for (let i = 0; i < N_AZ; i++) {
+        const d = Math.min(Math.abs(i - centre), N_AZ - Math.abs(i - centre));
+        dens[i] += weight * Math.exp(-((d / width) ** 2));
+      }
+    }
+    const add = (i: number, e: number, radius: number) => {
+      const az = ((i + r() - 0.5) / N_AZ) * 2 * Math.PI;
+      const el = e * D2R;
+      pos.push(radius * Math.sin(az) * Math.cos(el), radius * Math.sin(el), -radius * Math.cos(az) * Math.cos(el));
+      seed.push(r());
+      warm.push(r() < 0.72 ? 0.6 + 0.4 * r() : r() * 0.25);
+    };
+    for (let n = 0; n < 9000; n++) {
+      const i = Math.floor(r() * N_AZ);
+      if (r() > Math.min(1, dens[i])) continue;
+      if (r() < 0.6) {
+        // Near slope: from well below the ridge up to just under its crest.
+        const top = els[0][i] - 0.5;
+        add(i, top - Math.pow(r(), 1.6) * 7, BANDS[0].radius - 2);
+      } else {
+        // Middle hills: only the strip that clears the near ridge.
+        const lo = els[0][i] + 0.15;
+        const hi = els[1][i] - 0.25;
+        if (hi > lo) add(i, lo + r() * (hi - lo), BANDS[1].radius - 2);
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute("aSeed", new THREE.Float32BufferAttribute(seed, 1));
+    g.setAttribute("aWarm", new THREE.Float32BufferAttribute(warm, 1));
+    const pts = new THREE.Points(g, new THREE.ShaderMaterial({
+      uniforms: this.lampUniforms, vertexShader: LAMP_VERT, fragmentShader: LAMP_FRAG,
+      transparent: true, depthTest: false, depthWrite: false, blending: THREE.AdditiveBlending,
+    }));
+    pts.renderOrder = 21; // over every ridge, under the foreground trees
+    pts.frustumCulled = false;
+    return pts;
   }
 
   /** Load a square mosaic of tiles and return a bilinear height sampler. */
@@ -211,6 +303,7 @@ export class Horizon {
     const old = this.placeholder();
     if (old) this.scene.remove(old);
     for (let b = 0; b < BANDS.length; b++) this.scene.add(this.strip(els[b], snow[b], b, false));
+    this.scene.add(this.lamps(els));
     this.skyline = new Float32Array(N_AZ);
     for (let i = 0; i < N_AZ; i++) this.skyline[i] = Math.max(els[0][i], els[1][i], els[2][i]);
     this.info = { observerM: eye, peak };

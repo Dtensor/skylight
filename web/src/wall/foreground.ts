@@ -93,6 +93,11 @@ export class Foreground {
     scene.add(this.group);
   }
 
+  /** Hide the trees for a pass (the close-up looks past them). */
+  show(on: boolean): void {
+    this.group.visible = on;
+  }
+
   update(tSec: number, o: { visible: boolean; day: number; moonLit: number; twilight: number; windKmh: number }): void {
     this.group.visible = o.visible;
     if (!o.visible) return;

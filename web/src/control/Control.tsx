@@ -106,6 +106,29 @@ export function Control() {
           <Row label="Foreground trees">
             <Toggle value={cfg.wallForeground} onChange={(v) => set({ wallForeground: v })} />
           </Row>
+          <Row label="Sound" hint="night air, wind, aircraft rumble">
+            <Toggle value={cfg.wallSound} onChange={(v) => set({ wallSound: v })} />
+          </Row>
+          <Row label="Volume">
+            <Slider value={Math.round(cfg.wallVolume * 100)} min={0} max={100} step={5} unit="%"
+              onChange={(v) => set({ wallVolume: v / 100 })} />
+          </Row>
+          <Row label="Close-up panel" hint="zoomed view and details of one aircraft">
+            <Toggle value={cfg.wallScope} onChange={(v) => set({ wallScope: v })} />
+          </Row>
+          <Row label="Text size" hint="larger for reading from the bed">
+            <Slider value={Math.round(cfg.wallTextScale * 100)} min={80} max={220} step={5} unit="%"
+              onChange={(v) => set({ wallTextScale: v / 100 })} />
+          </Row>
+          <Row label="Right-now notes">
+            <Toggle value={cfg.wallMoments} onChange={(v) => set({ wallMoments: v })} />
+          </Row>
+          <Row label="Radio and cabin" hint="reconstructed calls and announcements">
+            <Toggle value={cfg.wallRadio} onChange={(v) => set({ wallRadio: v })} />
+          </Row>
+          <Row label="Spoken aloud" hint="soft voice through the speaker">
+            <Toggle value={cfg.wallSpeak} onChange={(v) => set({ wallSpeak: v })} />
+          </Row>
         </Section>
 
         <Section title="Calibration">
