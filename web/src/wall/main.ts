@@ -76,6 +76,8 @@ function start(): void {
   const meteors = new Meteors(scene);
   const flyers = new Flyers(scene);
   const sound = new Soundscape();
+  // Reachable from the WebView's remote debugger, to read the audio state.
+  (window as unknown as { skySound?: Soundscape }).skySound = sound;
   flyers.onOwl = (pan) => sound.owl(pan);
   const scopeCam = new THREE.PerspectiveCamera(8, 1, 0.01, 3000);
   let windKmh = 5;
@@ -636,6 +638,9 @@ function start(): void {
         bright: Math.max(0.08, Math.min(1, 1 - d / 38)),
       };
     }).sort((a, b) => b.gain - a.gain).slice(0, 3);
+    // Android pauses the page's audio when another screen (settings, an input
+    // picker) comes in front, and does not restart it afterwards.
+    if (cfg.wallSound && !sound.running) sound.unlock();
     sound.update(dt, tSec, { enabled: cfg.wallSound, volume: cfg.wallVolume, night: 1 - st.day, windKmh, voices });
 
     // ---- 2D overlay: compass, tags, info line ----

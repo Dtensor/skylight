@@ -23,8 +23,32 @@ interface Chirper {
 }
 
 type Ctx = AudioContext;
+type AnyCtx = BaseAudioContext;
 
-function noiseBuffer(ctx: Ctx, seconds: number, brown: boolean): AudioBuffer {
+/** A rendered buffer as a 16-bit WAV file, for a plain <audio> element. */
+function wavBlob(buf: AudioBuffer): Blob {
+  const ch = Math.min(2, buf.numberOfChannels);
+  const n = buf.length;
+  const out = new DataView(new ArrayBuffer(44 + n * ch * 2));
+  const str = (at: number, t: string) => { for (let i = 0; i < t.length; i++) out.setUint8(at + i, t.charCodeAt(i)); };
+  str(0, "RIFF"); out.setUint32(4, 36 + n * ch * 2, true); str(8, "WAVEfmt ");
+  out.setUint32(16, 16, true); out.setUint16(20, 1, true); out.setUint16(22, ch, true);
+  out.setUint32(24, buf.sampleRate, true); out.setUint32(28, buf.sampleRate * ch * 2, true);
+  out.setUint16(32, ch * 2, true); out.setUint16(34, 16, true); str(36, "data"); out.setUint32(40, n * ch * 2, true);
+  const data: Float32Array[] = [];
+  for (let c = 0; c < ch; c++) data.push(buf.getChannelData(c));
+  let at = 44;
+  for (let i = 0; i < n; i++) {
+    for (let c = 0; c < ch; c++) {
+      const v = Math.max(-1, Math.min(1, data[c][i]));
+      out.setInt16(at, v * 32767, true);
+      at += 2;
+    }
+  }
+  return new Blob([out.buffer], { type: "audio/wav" });
+}
+
+function noiseBuffer(ctx: AnyCtx, seconds: number, brown: boolean): AudioBuffer {
   const n = Math.floor(ctx.sampleRate * seconds);
   const buf = ctx.createBuffer(1, n, ctx.sampleRate);
   const d = buf.getChannelData(0);
@@ -59,6 +83,17 @@ export class Soundscape {
   private nextBell = 150 + Math.random() * 240;
   private nextBird = 4;
   private white!: AudioBuffer;
+  // Over a Bluetooth speaker this projector hands the browser an audio buffer
+  // too large for its live sound engine, which then never starts (its clock
+  // stays at zero). Plain <audio> elements still play, so in that case the
+  // sound is rendered off-line and played through those instead.
+  private born = performance.now();
+  private stuck = false;
+  private vol = 0;
+  private bed: HTMLAudioElement | null = null;
+  private bedNight: boolean | null = null;
+  private bedBuilding = false;
+  private busyUntil = 0;
 
   constructor() {
     try {
@@ -82,7 +117,92 @@ export class Soundscape {
     return !!this.ctx && this.ctx.state === "running";
   }
 
-  private panner(ctx: Ctx, pan: number): { node: AudioNode; pan: StereoPannerNode | null } {
+  /** True when the live engine is dead and <audio> elements carry the sound. */
+  get fallback(): boolean {
+    return this.stuck;
+  }
+
+  private play(buf: AudioBuffer, loop: boolean): HTMLAudioElement {
+    const url = URL.createObjectURL(wavBlob(buf));
+    const el = new Audio(url);
+    el.loop = loop;
+    el.volume = this.vol;
+    if (!loop) el.addEventListener("ended", () => URL.revokeObjectURL(url));
+    void el.play().catch((e) => console.warn("[wall] audio element:", e));
+    return el;
+  }
+
+  /** A 32-second loop of wind (and crickets by night) for the fallback path. */
+  private async buildBed(night: boolean): Promise<void> {
+    if (this.bedBuilding) return;
+    this.bedBuilding = true;
+    try {
+      const rate = 24000;
+      const secs = 32;
+      const off = new OfflineAudioContext(2, rate * secs, rate);
+      const src = (buf: AudioBuffer): AudioBufferSourceNode => {
+        const n = off.createBufferSource();
+        n.buffer = buf;
+        n.start(0);
+        return n;
+      };
+      const wf = off.createBiquadFilter();
+      wf.type = "lowpass";
+      wf.frequency.value = 520;
+      const wind = off.createGain();
+      const gust = new Float32Array(320);
+      for (let i = 0; i < gust.length; i++) {
+        const t = (i / (gust.length - 1)) * Math.PI * 2; // whole cycles, so the loop joins
+        gust[i] = 0.16 * (0.62 + 0.24 * Math.sin(t) + 0.14 * Math.sin(3 * t + 1.3));
+      }
+      wind.gain.setValueCurveAtTime(gust, 0, secs);
+      src(noiseBuffer(off, secs, true)).connect(wf);
+      wf.connect(wind);
+      wind.connect(off.destination);
+      if (night) {
+        const bf = off.createBiquadFilter();
+        bf.type = "bandpass";
+        bf.frequency.value = 5400;
+        bf.Q.value = 7;
+        const ins = off.createGain();
+        ins.gain.value = 0.02;
+        src(noiseBuffer(off, secs, false)).connect(bf);
+        bf.connect(ins);
+        ins.connect(off.destination);
+        for (let i = 0; i < 5; i++) {
+          const osc = off.createOscillator();
+          osc.frequency.value = 3900 + Math.random() * 1300;
+          const g = off.createGain();
+          g.gain.value = 0;
+          const p = this.panner(off, Math.random() * 1.8 - 0.9);
+          osc.connect(g);
+          g.connect(p.node);
+          p.node.connect(off.destination);
+          osc.start(0);
+          const level = (0.02 + Math.random() * 0.05) * 0.9;
+          const every = 1 / (1.5 + Math.random() * 1.3);
+          for (let t = Math.random() * 2; t < secs - 0.2; t += every * (0.92 + Math.random() * 0.16) + (Math.random() < 0.04 ? 2 + Math.random() * 5 : 0)) {
+            for (let k = 0; k < 2 + Math.floor(Math.random() * 3); k++) {
+              const at = t + k * 0.021;
+              g.gain.setValueAtTime(0, at);
+              g.gain.linearRampToValueAtTime(level, at + 0.005);
+              g.gain.linearRampToValueAtTime(0, at + 0.016);
+            }
+          }
+        }
+      }
+      const buf = await off.startRendering();
+      if (this.bed) this.bed.pause();
+      this.bed = this.play(buf, true);
+      this.bedNight = night;
+    } catch (e) {
+      console.warn("[wall] no ambient bed:", e);
+    } finally {
+      this.bedBuilding = false;
+    }
+  }
+
+  private panner(ctx: AnyCtx, pan: number): { node: AudioNode; pan: StereoPannerNode | null } {
     if (typeof ctx.createStereoPanner === "function") {
       const p = ctx.createStereoPanner();
       p.pan.value = pan;
@@ -173,8 +293,7 @@ export class Soundscape {
   }
 
   /** One enveloped sine partial; the building block of the owl, bell and birds. */
-  private tone(at: number, f0: number, f1: number, dur: number, level: number, pan: number, attack = 0.04, cutoff = 0): void {
-    const ctx = this.ctx!;
+  private tone(at: number, f0: number, f1: number, dur: number, level: number, pan: number, attack = 0.04, cutoff = 0, ctx: AnyCtx = this.ctx!, dest: AudioNode = this.master): void {
     const osc = ctx.createOscillator();
     osc.frequency.setValueAtTime(f0, at);
     osc.frequency.exponentialRampToValueAtTime(f1, at + dur);
@@ -193,7 +312,7 @@ export class Soundscape {
       out = lp;
     }
     out.connect(p.node);
-    p.node.connect(this.master);
+    p.node.connect(dest);
     osc.start(at);
     osc.stop(at + dur + 0.05);
   }
@@ -218,11 +337,9 @@ export class Soundscape {
     }
   }
 
-  private speaking = 0;
-
   /** True while a spoken exchange is still playing. */
   get busy(): boolean {
-    return !!this.ctx && this.ctx.currentTime < this.speaking;
+    return performance.now() < this.busyUntil;
   }
 
   /**
@@ -231,19 +348,41 @@ export class Soundscape {
    * chime and sounds like an overhead speaker a few rows away.
    */
   async say(lines: { url: string; pitch: number }[], channel: "radio" | "cabin", pan: number): Promise<void> {
-    const ctx = this.ctx;
-    if (!ctx || ctx.state !== "running" || this.busy) return;
-    this.speaking = ctx.currentTime + 20; // held until the real length is known
+    const live = this.ctx;
+    if (!live || this.busy || (!this.stuck && live.state !== "running")) return;
+    this.busyUntil = performance.now() + 20000; // held until the real length is known
+    const stuck = this.stuck;
+    const dec: AnyCtx = stuck ? new OfflineAudioContext(1, 1, 24000) : live;
     const bufs: (AudioBuffer | null)[] = await Promise.all(lines.map(async (l) => {
       try {
         const r = await fetch(l.url);
         if (!r.ok) return null;
         const data = await r.arrayBuffer();
-        return await new Promise<AudioBuffer | null>((done) => ctx.decodeAudioData(data, (b) => done(b), () => done(null)));
+        return await new Promise<AudioBuffer | null>((done) => dec.decodeAudioData(data, (b) => done(b), () => done(null)));
       } catch {
         return null;
       }
     }));
+    if (!stuck) {
+      const end = this.mix(live, this.master, live.currentTime + 0.15, bufs, lines, channel, pan);
+      this.busyUntil = performance.now() + (end - live.currentTime) * 1000;
+      return;
+    }
+    let total = 2.4;
+    lines.forEach((l, i) => { if (bufs[i]) total += bufs[i]!.duration / l.pitch + 0.85; });
+    const off = new OfflineAudioContext(2, Math.ceil(total * 24000), 24000);
+    const end = this.mix(off, off.destination, 0.05, bufs, lines, channel, pan);
+    try {
+      this.play(await off.startRendering(), false);
+      this.busyUntil = performance.now() + end * 1000;
+    } catch (e) {
+      console.warn("[wall] speech not rendered:", e);
+      this.busyUntil = 0;
+    }
+  }
+
+  /** Lay one exchange into a context, live or off-line; returns its end time. */
+  private mix(ctx: AnyCtx, dest: AudioNode, start: number, bufs: (AudioBuffer | null)[], lines: { url: string; pitch: number }[], channel: "radio" | "cabin", pan: number): number {
     const out = ctx.createGain();
     out.gain.value = channel === "radio" ? 0.42 : 0.34;
     const hp = ctx.createBiquadFilter();
@@ -256,11 +395,11 @@ export class Soundscape {
     hp.connect(lp);
     lp.connect(out);
     out.connect(p.node);
-    p.node.connect(this.master);
-    let t = ctx.currentTime + 0.15;
+    p.node.connect(dest);
+    let t = start;
     if (channel === "cabin") {
-      this.tone(t, 587, 585, 1.1, 0.05, pan * 0.5, 0.01, 2400);
-      this.tone(t + 0.42, 466, 464, 1.5, 0.05, pan * 0.5, 0.01, 2400);
+      this.tone(t, 587, 585, 1.1, 0.05, pan * 0.5, 0.01, 2400, ctx, dest);
+      this.tone(t + 0.42, 466, 464, 1.5, 0.05, pan * 0.5, 0.01, 2400, ctx, dest);
       t += 1.5;
     }
     const hiss = (at: number, dur: number, level: number) => {
@@ -291,7 +430,7 @@ export class Soundscape {
       src.start(t + 0.1);
       t += dur + (channel === "radio" ? 0.75 : 0.5);
     });
-    this.speaking = t;
+    return t;
   }
 
   private tweet(): void {
@@ -307,6 +446,17 @@ export class Soundscape {
   update(dt: number, tSec: number, o: { enabled: boolean; volume: number; night: number; windKmh: number; voices: Voice[] }): void {
     const ctx = this.ctx;
     if (!ctx || ctx.state !== "running") return;
+    this.vol = o.enabled ? Math.max(0, Math.min(1, o.volume)) : 0;
+    if (!this.stuck && ctx.currentTime === 0 && performance.now() - this.born > 4000) {
+      this.stuck = true;
+      console.warn("[wall] live audio engine is not running; using rendered audio instead");
+    }
+    if (this.stuck) {
+      if (this.bed) this.bed.volume = this.vol;
+      const night = o.night > 0.5;
+      if (o.enabled && this.bedNight !== night) void this.buildBed(night);
+      return;
+    }
     const now = ctx.currentTime;
     const set = (p: AudioParam, v: number, tc = 0.5) => p.setTargetAtTime(v, now, tc);
     set(this.master.gain, o.enabled ? Math.max(0, Math.min(1, o.volume)) : 0, 0.3);
