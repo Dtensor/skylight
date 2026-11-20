@@ -15,6 +15,7 @@ import { Poller } from "./datasource.js";
 import { Hub } from "./hub.js";
 import { TleStore } from "./tle.js";
 import { Memory } from "./memory.js";
+import { ReplayStore } from "./replay.js";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 
@@ -59,6 +60,15 @@ async function main(): Promise<void> {
   const tleStore = new TleStore(resolve(DATA_DIR, "tle-cache.json"));
   await tleStore.load();
 
+  // Recent traffic, kept for labelled replay when the sky goes quiet.
+  const replay = new ReplayStore(
+    resolve(DATA_DIR, "replay.json"),
+    Number(process.env.REPLAY_EVERY_MS ?? 3000),
+    Number(process.env.REPLAY_FRAMES ?? 600),
+  );
+  await replay.load();
+  setInterval(() => void replay.save().catch((e) => console.error("[replay] save:", e)), 5 * 60_000).unref?.();
+
   const app = express();
   app.use(express.json());
 
@@ -80,6 +90,7 @@ async function main(): Promise<void> {
     enricher,
     onSnapshot: (now, aircraft) => hub.broadcastAircraft(now, aircraft),
     onStatus: (status) => hub.broadcastStatus(status),
+    replay,
   });
 
   // The sky's memory: note who is overhead once a minute.
@@ -87,9 +98,9 @@ async function main(): Promise<void> {
   await memory.load();
   setInterval(() => {
     const c = store.get();
-    memory.note(c.centerLat, c.centerLon, poller.getSnapshot().aircraft);
+    memory.note(c.centerLat, c.centerLon, poller.getLiveSnapshot().aircraft);
   }, 60_000).unref?.();
-  for (const sig of ["SIGINT", "SIGTERM"] as const) process.once(sig, () => void memory.save().then(() => process.exit(0)));
+  for (const sig of ["SIGINT", "SIGTERM"] as const) process.once(sig, () => void Promise.allSettled([memory.save(), replay.save()]).then(() => process.exit(0)));
 
   app.get("/api/seen", (req, res) => {
     const c = store.get();
@@ -243,6 +254,48 @@ async function main(): Promise<void> {
       }
     }
     res.json(wx!.body);
+  });
+
+  // Nearest-airport METAR (aviationweather.gov, keyless). Pilots' weather:
+  // wind, visibility, cloud bases, QNH and flight category. Cached 5 minutes;
+  // the observation time is passed through so clients can mark it stale.
+  const metars = new Map<string, { at: number; body: unknown }>();
+  app.get("/api/metar", async (req, res) => {
+    const id = String(req.query.id ?? store.get().metarStation ?? "").trim().toUpperCase();
+    if (!/^[A-Z][A-Z0-9]{3}$/.test(id)) return res.status(400).json({ error: "station must be a 4-letter ICAO code" });
+    const hit = metars.get(id);
+    if (hit && Date.now() - hit.at < 5 * 60_000) return res.json(hit.body);
+    try {
+      const r = await fetch(`https://aviationweather.gov/api/data/metar?ids=${id}&format=json`, {
+        signal: AbortSignal.timeout(30000),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const list = (await r.json()) as Array<Record<string, unknown>>;
+      const m = Array.isArray(list) ? list[0] : undefined;
+      if (!m) return res.status(404).json({ error: `no METAR for ${id}` });
+      const body = {
+        station: id,
+        name: m.name,
+        raw: m.rawOb,
+        observedAt: typeof m.obsTime === "number" ? m.obsTime * 1000 : null,
+        windDir: m.wdir,
+        windKt: m.wspd,
+        gustKt: m.wgst ?? null,
+        visibilitySm: m.visib,
+        tempC: m.temp,
+        dewC: m.dewp,
+        qnhHpa: m.altim,
+        clouds: Array.isArray(m.clouds) ? m.clouds : [],
+        category: m.fltCat ?? null,
+      };
+      if (metars.size > 50) metars.clear();
+      metars.set(id, { at: Date.now(), body });
+      res.json(body);
+    } catch (err) {
+      console.error("[metar]", err instanceof Error ? err.message : err);
+      if (hit) return res.json(hit.body); // last good beats nothing; client ages it
+      res.status(502).json({ error: "metar unavailable" });
+    }
   });
 
   app.post("/api/source", (req, res) => {

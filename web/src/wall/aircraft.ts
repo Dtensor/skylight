@@ -5,7 +5,7 @@
 
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
-import type { Aircraft } from "@shared/index.js";
+import { trueScaleFactor, type Aircraft } from "@shared/index.js";
 
 const D2R = Math.PI / 180;
 const FT_KM = 0.0003048;
@@ -251,7 +251,12 @@ export class Fleet {
     L.strobeR.position.set(0.5, 0, 0.14);
     L.landing.position.set(0, -0.06, -0.3);
     group.add(...Object.values(L));
-    group.userData.scaleMul = kind === "wide" ? 1.45 : kind === "prop" ? 0.8 : 1;
+    // Real wingspan when the type is known, softened (the wall exaggerates
+    // apparent size already); class guess otherwise.
+    const real = trueScaleFactor(ac.typeCode);
+    group.userData.scaleMul = real != null
+      ? Math.min(1.8, Math.max(0.6, Math.sqrt(real)))
+      : kind === "wide" ? 1.45 : kind === "prop" ? 0.8 : 1;
 
     const g = new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(TRAIL_N * 2 * 3), 3));

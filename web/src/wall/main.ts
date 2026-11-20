@@ -604,7 +604,7 @@ function start(): void {
     if (focus) lookUp(focus);
     if (tSec - lastObserve > 1) {
       lastObserve = tSec;
-      radio.observe(tSec, fleet.views, { place: cfg.wallPlaceName || "Area", windDir, windKmh, observerFt: observerKm * 3280.84 });
+      if (status?.mode !== "replay") radio.observe(tSec, fleet.views, { place: cfg.wallPlaceName || "Area", windDir, windKmh, observerFt: observerKm * 3280.84 });
     }
     if (focus) {
       scopeCam.fov = Math.max(2.5, Math.min(22, focus.sizeDeg * 2.5));
@@ -737,7 +737,8 @@ function start(): void {
       }
     }
 
-    if (cfg.wallMoments) {
+    // Replayed traffic is not "right now": no live notes or radio over it.
+    if (cfg.wallMoments && status?.mode !== "replay") {
       // One unhurried line at a time: 22 s on the wall, a few seconds of quiet
       // sky between, slow fades. An arrival may cut the quiet short, never a line.
       const SHOW = 22;
@@ -783,7 +784,7 @@ function start(): void {
       }
     }
 
-    if (cfg.wallRadio) {
+    if (cfg.wallRadio && status?.mode !== "replay") {
       if (tSec - callAt > callFor + 8) {
         const c = radio.take(tSec, focusHex, new Set(screenOf.keys()));
         if (c) {
@@ -851,7 +852,13 @@ function start(): void {
       } catch {
         time = date.toLocaleTimeString("en-GB", clock);
       }
-      const feed = !connected ? "connecting…" : status && !status.ok ? "aircraft feed down" : `${fleet.views.length} aircraft`;
+      const feed = !connected
+        ? "connecting…"
+        : status?.mode === "replay" && status.replayOf
+          ? `REPLAY of ${new Date(status.replayOf).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })} · ${fleet.views.length} aircraft`
+          : status && !status.ok
+            ? "aircraft feed down"
+            : `${fleet.views.length} aircraft`;
       const light = st.sunAlt > 0 ? "day" : st.sunAlt > -6 ? "twilight" : st.sunAlt > -18 ? "dusk" : "night";
       const line = [
         ...(cfg.wallPlaceName ? [cfg.wallPlaceName] : []),

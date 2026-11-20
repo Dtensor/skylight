@@ -18,7 +18,9 @@ import {
   rangeMeters,
   metersToMiles,
   EMERGENCY_SQUAWKS,
+  trueScaleFactor,
   type Aircraft,
+  type SourceStatus,
   type Config,
   type Meters,
   type Point,
@@ -36,7 +38,28 @@ interface Sample {
   m: Meters;
   track?: number;
   gs?: number;
+  /** Altitude (ft) and vertical rate (ft/min) at this fix, when known. */
+  alt?: number;
+  rate?: number;
 }
+
+/** Nearest-airport weather, as served by /api/metar. */
+export interface Metar {
+  station: string;
+  observedAt: number | null;
+  windDir?: number | string;
+  windKt?: number;
+  gustKt?: number | null;
+  visibilitySm?: number | string;
+  tempC?: number;
+  dewC?: number;
+  qnhHpa?: number;
+  clouds: { cover: string; base?: number | null }[];
+  category?: string | null;
+}
+
+/** A METAR older than this is shown, but marked stale (they issue half-hourly). */
+const METAR_STALE_MS = 100 * 60_000;
 
 interface Track {
   ac: Aircraft;
@@ -111,6 +134,10 @@ export class Renderer {
   private skyComputedAt = 0;
   private skyOffsetUsed = NaN;
 
+  // Feed honesty + airport weather, drawn as one dim footer line.
+  private status: SourceStatus | null = null;
+  private metar: Metar | null = null;
+
   constructor(
     private canvas: HTMLCanvasElement,
     private getConfig: () => Config,
@@ -159,6 +186,13 @@ export class Renderer {
     cancelAnimationFrame(this.raf);
   }
 
+  setStatus(status: SourceStatus | null): void {
+    this.status = status;
+  }
+  setMetar(metar: Metar | null): void {
+    this.metar = metar;
+  }
+
   resize(): void {
     this.dpr = Math.min(window.devicePixelRatio || 1, 2);
     this.w = this.canvas.clientWidth;
@@ -190,7 +224,8 @@ export class Renderer {
         const last = tr.history[tr.history.length - 1];
         // Dedup identical fixes (source sometimes repeats a position).
         if (!last || last.m.east !== m.east || last.m.north !== m.north) {
-          tr.history.push({ t: now, m, track: ac.track, gs: ac.gs });
+          const alt = ac.altBaro ?? ac.altGeom ?? undefined;
+          tr.history.push({ t: now, m, track: ac.track, gs: ac.gs, alt, rate: ac.baroRate ?? undefined });
         }
       }
     }
@@ -230,6 +265,33 @@ export class Renderer {
       }
     }
     return lastS.m;
+  }
+
+  /**
+   * Altitude at render time, blended between the bracketing fixes. Reports
+   * arrive in 25 ft steps about once a second; blending (and, past the newest
+   * fix, following the vertical rate for a few seconds) turns those steps into
+   * a continuous climb, so the altitude colour glides instead of ticking.
+   */
+  private altAt(tr: Track, tt: number, cfg: Config): number {
+    const h = tr.history;
+    const fallback = tr.ac.altBaro ?? tr.ac.altGeom ?? 0;
+    if (!h.length) return fallback;
+    const last = h[h.length - 1];
+    if (tt >= last.t) {
+      if (last.alt == null) return fallback;
+      const dt = Math.min((tt - last.t) / 1000, cfg.maxExtrapolationSec);
+      return last.alt + ((last.rate ?? 0) / 60) * dt;
+    }
+    for (let i = h.length - 1; i > 0; i--) {
+      const a = h[i - 1];
+      const b = h[i];
+      if (a.t <= tt && tt <= b.t) {
+        if (a.alt == null || b.alt == null) return b.alt ?? a.alt ?? fallback;
+        return a.alt + (b.alt - a.alt) * ((tt - a.t) / Math.max(1, b.t - a.t));
+      }
+    }
+    return h[0].alt ?? fallback;
   }
 
   private draw(): void {
@@ -290,7 +352,7 @@ export class Renderer {
       const heading = this.screenHeading(tr, tt, proj);
       const edgeFade = clamp01((cfg.radiusMiles - rangeMi) / (cfg.radiusMiles * 0.14));
       const alpha = clamp01(edgeFade) * tr.life * cfg.brightness;
-      const alt = tr.ac.altBaro ?? tr.ac.altGeom ?? 0;
+      const alt = this.altAt(tr, tt, cfg);
       const color = cfg.altitudeColor ? altRamp(alt) : hexToRgb(cfg.palette.glyph);
       const emergency = cfg.highlightEmergency && !!tr.ac.squawk && EMERGENCY_SQUAWKS.has(tr.ac.squawk);
 
@@ -310,6 +372,42 @@ export class Renderer {
     this.drawLabels(cfg, byNear);
 
     if (cfg.theme === "focus" && byNear.length) this.drawDetailPanel(cfg, byNear[0]);
+    this.drawFooter(cfg);
+  }
+
+  /** One dim line at the bottom: the replay label (never hidden while
+   *  replaying — the ceiling must not pass old traffic off as live) and the
+   *  airport METAR. */
+  private drawFooter(cfg: Config): void {
+    const parts: string[] = [];
+    const st = this.status;
+    if (st?.mode === "replay" && st.replayOf) {
+      const at = new Date(st.replayOf).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      parts.push(`REPLAY · recorded ${at}${st.ok ? " · sky quiet" : " · feed down"}`);
+    } else if (st?.mode === "stale") {
+      parts.push("feed stale · holding last picture");
+    } else if (st?.mode === "unavailable") {
+      parts.push("aircraft feed unavailable");
+    }
+    if (cfg.showMetar && this.metar) parts.push(formatMetar(this.metar));
+    if (!parts.length) return;
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.font = `12px ${cfg.fonts.mono}`;
+    // Bottom-left corner: outside the round field, clear of the compass "S"
+    // and of star names along the rim. One line per part, replay on top.
+    ctx.textAlign = "left";
+    ctx.textBaseline = "bottom";
+    const replay = st?.mode === "replay";
+    this.withLabelRotation(cfg, this.w / 2, this.h / 2, () => {
+      parts.forEach((text, i) => {
+        const isReplay = replay && i === 0;
+        ctx.fillStyle = isReplay ? cfg.palette.accent : cfg.palette.text;
+        ctx.globalAlpha = (isReplay ? 0.85 : 0.5) * cfg.brightness;
+        ctx.fillText(text, 18, this.h - 16 - (parts.length - 1 - i) * 18);
+      });
+    });
+    ctx.restore();
   }
 
   /**
@@ -716,7 +814,10 @@ export class Renderer {
     const ctx = this.ctx;
     const color = v.emergency ? hexToRgb(cfg.palette.warn) : v.color;
     const kind = classifyGlyph(v.tr.ac);
-    const s = cfg.glyphSizePx * GLYPH_SCALE[kind];
+    // True scale by wingspan when the type is known (helicopters keep their
+    // class size: rotor diameter is not a wingspan).
+    const real = cfg.trueScale && kind !== "helicopter" ? trueScaleFactor(v.tr.ac.typeCode) : null;
+    const s = cfg.glyphSizePx * (real ?? GLYPH_SCALE[kind]);
 
     ctx.save();
     ctx.translate(v.p.x, v.p.y);
@@ -1065,4 +1166,30 @@ function hexToRgb(hex: string): [number, number, number] {
   const n = m.length === 3 ? m.split("").map((c) => c + c).join("") : m;
   const int = parseInt(n, 16);
   return [(int >> 16) & 255, (int >> 8) & 255, int & 255];
+}
+
+/** "VEBD 02:30Z · wind VRB 2 kt · vis 6 km · SCT100 SCT200 · 18°/14° · Q1019 · MVFR" */
+export function formatMetar(m: Metar): string {
+  const bits: string[] = [m.station];
+  if (m.observedAt) {
+    const d = new Date(m.observedAt);
+    bits[0] += ` ${String(d.getUTCHours()).padStart(2, "0")}${String(d.getUTCMinutes()).padStart(2, "0")}Z`;
+  }
+  if (m.windKt != null) {
+    const dir = typeof m.windDir === "number" ? `${String(m.windDir).padStart(3, "0")}°` : String(m.windDir ?? "");
+    bits.push(m.windKt === 0 ? "calm" : `wind ${dir} ${m.windKt}${m.gustKt ? `G${m.gustKt}` : ""} kt`);
+  }
+  if (m.visibilitySm != null) {
+    const sm = typeof m.visibilitySm === "number" ? m.visibilitySm : parseFloat(String(m.visibilitySm));
+    if (Number.isFinite(sm)) bits.push(`vis ${sm >= 6 ? "10+" : (sm * 1.609).toFixed(0)} km`);
+  }
+  const clouds = m.clouds
+    .map((c) => (c.base != null ? `${c.cover}${String(Math.round(c.base / 100)).padStart(3, "0")}` : c.cover))
+    .join(" ");
+  if (clouds) bits.push(clouds);
+  if (m.tempC != null) bits.push(`${m.tempC}°/${m.dewC ?? "–"}°`);
+  if (m.qnhHpa != null) bits.push(`Q${Math.round(m.qnhHpa)}`);
+  if (m.category) bits.push(m.category);
+  if (m.observedAt && Date.now() - m.observedAt > METAR_STALE_MS) bits.push("(old)");
+  return bits.join(" · ");
 }

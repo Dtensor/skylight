@@ -6,6 +6,7 @@ import type { Aircraft, Config, DataSource } from "@shared/index.js";
 import type { SourceStatus } from "@shared/index.js";
 import { lookupAirline, lookupType } from "./enrich/tables.js";
 import type { RouteEnricher } from "./enrich/routes.js";
+import type { ReplayStore } from "./replay.js";
 
 /** Raw readsb-style aircraft record (subset we use). */
 interface RawAircraft {
@@ -75,7 +76,12 @@ export interface PollerOptions {
   enricher: RouteEnricher;
   onSnapshot: (now: number, aircraft: Aircraft[]) => void;
   onStatus: (status: SourceStatus) => void;
+  /** Recorder/replayer for quiet skies; omit to disable replay entirely. */
+  replay?: ReplayStore;
 }
+
+/** A failed feed counts as stale (last picture held) for this long. */
+const STALE_GRACE_MS = 45_000;
 
 /**
  * Merge a primary (radio) list with a secondary (API) list by hex, preferring
@@ -127,6 +133,11 @@ export class Poller {
   private apiHost = "";
   /** hex -> last good enrichment, so resolved routes never flicker back to "—". */
   private sticky = new Map<string, StickyEnrichment>();
+  /** Latest *live* aircraft (never replayed ones) — what memory may note. */
+  private lastLive: Aircraft[] = [];
+  /** When live traffic was last seen; quiet time counts from start-up. */
+  private lastTraffic = Date.now();
+  private replaying = false;
 
   constructor(private o: PollerOptions) {
     this.status = {
@@ -139,6 +150,10 @@ export class Poller {
 
   getSnapshot(): { now: number; aircraft: Aircraft[] } {
     return { now: Date.now(), aircraft: this.last };
+  }
+  /** Only what is really overhead now: never contains replayed traffic. */
+  getLiveSnapshot(): { now: number; aircraft: Aircraft[] } {
+    return { now: Date.now(), aircraft: this.replaying ? [] : this.lastLive };
   }
   getStatus(): SourceStatus {
     return this.status;
@@ -226,29 +241,76 @@ export class Poller {
 
   private async tick(): Promise<void> {
     const now = Date.now();
+    const cfg = this.o.getConfig();
     const primary = await this.fetchList(this.o.source, now);
-    if (primary === null) {
-      this.status = { ...this.status, ok: false, message: "source fetch failed" };
-      this.o.onStatus(this.status);
-      return;
-    }
     const supplement = this.o.source === "radio" && this.o.supplementApi;
-    const merged = supplement ? mergeSources(primary, this.lastApi) : primary;
-    for (const ac of merged) this.enrich(ac, now);
-    this.last = merged;
-    this.pruneSticky(now);
-    this.status = {
-      source: this.o.source,
-      ok: true,
-      count: merged.length,
-      lastOk: now,
-      message: supplement
+    let note: string | undefined;
+    if (primary !== null) {
+      const merged = supplement ? mergeSources(primary, this.lastApi) : primary;
+      for (const ac of merged) this.enrich(ac, now);
+      this.lastLive = merged;
+      this.pruneSticky(now);
+      if (merged.length) this.lastTraffic = now;
+      this.o.replay?.record(now, merged);
+      note = supplement
         ? `radio + ${this.lastApi.length} via ${this.apiHost || "API"}`
         : this.o.source === "api" && this.apiHost
           ? `via ${this.apiHost}`
-          : undefined,
+          : undefined;
+    }
+    const lastOk = primary !== null ? now : this.status.lastOk;
+
+    // Quiet = no live traffic for a while, whether the sky is empty or the
+    // feed is down. Then (if allowed) replay recorded traffic, labelled.
+    const quietMs = now - this.lastTraffic;
+    const replay = this.o.replay;
+    const wantReplay =
+      cfg.replayWhenQuiet && !!replay && replay.size >= 2 &&
+      quietMs > Math.max(0.5, cfg.replayAfterMin) * 60_000;
+    if (wantReplay && !this.replaying) replay!.startPlayback(now);
+    this.replaying = wantReplay;
+    const frame = wantReplay ? replay!.frameAt(now) : null;
+
+    if (frame) {
+      this.last = frame.aircraft;
+      this.status = {
+        source: this.o.source,
+        ok: primary !== null,
+        count: frame.aircraft.length,
+        lastOk,
+        mode: "replay",
+        replayOf: frame.recordedAt,
+        message: `replay of traffic recorded ${new Date(frame.recordedAt).toISOString()}` +
+          (primary === null ? " · live feed down" : " · sky quiet"),
+      };
+      this.o.onSnapshot(now, this.last);
+      this.o.onStatus(this.status);
+      return;
+    }
+
+    if (primary === null) {
+      const held = lastOk != null && now - lastOk < STALE_GRACE_MS;
+      this.status = {
+        ...this.status,
+        ok: false,
+        mode: held ? "stale" : "unavailable",
+        replayOf: undefined,
+        message: "source fetch failed",
+      };
+      this.o.onStatus(this.status);
+      return;
+    }
+
+    this.last = this.lastLive;
+    this.status = {
+      source: this.o.source,
+      ok: true,
+      count: this.last.length,
+      lastOk: now,
+      mode: "live",
+      message: note,
     };
-    this.o.onSnapshot(now, merged);
+    this.o.onSnapshot(now, this.last);
     this.o.onStatus(this.status);
   }
 

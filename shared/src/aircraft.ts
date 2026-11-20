@@ -50,6 +50,8 @@ export interface Aircraft {
 
   /** Server timestamp (ms) of the snapshot this fix came from. */
   ts?: number;
+  /** True when this is recorded traffic being replayed, not a live fix. */
+  replay?: boolean;
 }
 
 /** A single broadcast snapshot of the current sky. */

@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import type { Config, Theme } from "@shared/index.js";
 import { DEFAULT_CONFIG } from "@shared/index.js";
 import { useStream } from "../lib/useStream.js";
-import { Renderer } from "./renderer.js";
+import { Renderer, type Metar } from "./renderer.js";
 
 const THEMES: Theme[] = ["ambient", "telemetry", "focus"];
 
@@ -34,6 +34,38 @@ export function Display() {
   useEffect(() => {
     rendererRef.current?.update(state.aircraft);
   }, [state.now, state.aircraft]);
+
+  // Feed status (live / stale / replay) for the on-ceiling label.
+  useEffect(() => {
+    rendererRef.current?.setStatus(state.status ?? null);
+  }, [state.status]);
+
+  // Nearest-airport METAR, refreshed every 5 minutes while shown.
+  const station = state.config?.metarStation;
+  const showMetar = state.config?.showMetar;
+  useEffect(() => {
+    if (!showMetar || !station) {
+      rendererRef.current?.setMetar(null);
+      return;
+    }
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const r = await fetch(`/api/metar?id=${encodeURIComponent(station)}`, { signal: AbortSignal.timeout(30000) });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const m = (await r.json()) as Metar;
+        if (!cancelled) rendererRef.current?.setMetar(m);
+      } catch {
+        /* keep the last one; formatMetar marks it old once it ages */
+      }
+    };
+    void load();
+    const id = setInterval(() => void load(), 5 * 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [showMetar, station]);
 
   // Keyboard calibration (handy when a keyboard is plugged into the Pi).
   useEffect(() => {

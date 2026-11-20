@@ -202,3 +202,35 @@ Not available, by choice or by fact:
 Keys on the wall: `r` radio and cabin on/off, `v` spoken voice on/off (also on
 the control page). Server endpoints: `/api/say?t=`, `/api/seen?hex=&flight=`,
 `/api/point?lat=&lon=`.
+
+## Quiet skies, true sizes, and the airport's weather (added 2026-11-20)
+
+Ideas taken from airtraffic.stream, a 3D SFO tracker. We read its browser code and rewrote the ideas ourselves. None of its files were copied, and it publishes no licence.
+
+### What we built
+
+1. **Replay when the sky is quiet.** Kalimpong's sky is often empty, and the free feeds sometimes drop out. The server keeps the last 600 snapshots that actually had aircraft in them (one every 3 seconds, about 30 minutes of traffic) in `server/data/replay.json`. If no live aircraft appear for **3 minutes**, whether the sky is empty or the feed is down, it plays that recording back. Planes move smoothly between recorded positions, and the ceiling shows a purple line in the bottom-left corner: **`REPLAY · recorded 08:29 · sky quiet`**. When real traffic returns, the replay stops on the next poll.
+   - It is like a cricket ground's big screen showing highlights during a rain delay: clearly a replay, never passed off as live.
+   - Replayed planes are **never** saved to the sky's memory (`sightings.json`). On the wall, the "right now" notes and the radio calls stay off during a replay, because they would describe old traffic as current.
+2. **True-scale wingspans.** Each glyph is sized by the aircraft's real wingspan, looked up from its ICAO type (`shared/src/fleet.ts`, using published manufacturer figures). An A380 (79.8 m) is drawn about 2.2× the width of an A320 (35.8 m), and a CRJ-200 about 0.6×. Unknown types and helicopters keep the old size-by-class rule.
+3. **Airport weather (METAR).** A METAR is the standard weather report pilots read. `/api/metar` fetches the latest one from aviationweather.gov (free, no key) and caches it for 5 minutes. A dim line on the ceiling shows it, for example `VEBD 0230Z · wind VRB 2 kt · vis 6 km · SCT100 SCT200 · 18°/14° · Q1019 · MVFR`. A report older than 100 minutes is marked `(old)`.
+4. **Smooth altitude colour.** Aircraft report altitude in 25 ft steps. The renderer now blends altitude between position reports, and continues along the reported climb or descent rate for a few seconds after the latest one, so the colour shifts smoothly as a plane climbs.
+
+### How you use it
+
+On the phone panel, **View → True-scale wingspans**, and **Feed & weather → Replay when quiet / Quiet for / Airport weather / METAR station** (try `VQPR` for Paro).
+The status pill at the top shows `· replay` or `· stale` whenever the feed isn't live.
+
+### Feed states (in `/api/status` as `mode`)
+
+| mode | meaning |
+|---|---|
+| `live` | fresh data from the feed |
+| `stale` | the feed failed less than 45 s ago; the last picture stays up |
+| `replay` | quiet for longer than "Quiet for"; recorded traffic plays back, labelled |
+| `unavailable` | the feed is down and there is nothing (or no permission) to replay |
+
+### Gotchas
+
+- Replay needs at least 2 recorded frames. After a fresh install, there's nothing to replay until some traffic has been seen.
+- To test replay without waiting for a quiet night, briefly set `centerLat/centerLon` to open ocean and `replayAfterMin` to 1, then **restore them**. This shares `server/data/config.json` with the live display.

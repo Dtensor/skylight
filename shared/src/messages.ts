@@ -14,7 +14,14 @@ export interface SourceStatus {
   lastOk: number | null;
   /** Human-readable note (e.g. last error). */
   message?: string;
+  /** What the sky is showing: fresh data, a held last snapshot, a labelled
+   *  replay of earlier recorded traffic, or nothing at all. */
+  mode?: FeedMode;
+  /** During replay: when (ms epoch) the frame being shown was recorded. */
+  replayOf?: number;
 }
+
+export type FeedMode = "live" | "stale" | "replay" | "unavailable";
 
 /** Server -> client. */
 export type ServerMessage =

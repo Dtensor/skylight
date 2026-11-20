@@ -69,7 +69,9 @@ export function Control() {
           Ceiling Tracker
         </div>
         <div className="stat">
-          {state.status?.source ?? "—"} · {state.aircraft.length} overhead
+          {state.status?.source ?? "—"} · {state.aircraft.length}{" "}
+          {state.status?.mode === "replay" ? "in replay" : "overhead"}
+          {state.status?.mode && state.status.mode !== "live" ? ` · ${state.status.mode}` : ""}
         </div>
       </header>
 
@@ -176,6 +178,34 @@ export function Control() {
           </Row>
           <Row label="Color by altitude">
             <Toggle value={cfg.altitudeColor} onChange={(v) => set({ altitudeColor: v })} />
+          </Row>
+          <Row label="True-scale wingspans" hint="size by real aircraft type; A380 ≈ 2.2× an A320">
+            <Toggle value={cfg.trueScale} onChange={(v) => set({ trueScale: v })} />
+          </Row>
+        </Section>
+
+        <Section title="Feed & weather">
+          <Row label="Replay when quiet" hint="loop recent recorded traffic, labelled REPLAY">
+            <Toggle value={cfg.replayWhenQuiet} onChange={(v) => set({ replayWhenQuiet: v })} />
+          </Row>
+          <Row label="Quiet for">
+            <Slider value={cfg.replayAfterMin} min={1} max={30} step={1} unit="min"
+              onChange={(v) => set({ replayAfterMin: v })} />
+          </Row>
+          <Row label="Airport weather (METAR)">
+            <Toggle value={cfg.showMetar} onChange={(v) => set({ showMetar: v })} />
+          </Row>
+          <Row label="METAR station" hint="4-letter ICAO, e.g. VEBD Bagdogra, VQPR Paro">
+            <input
+              className="text-input"
+              defaultValue={cfg.metarStation}
+              maxLength={4}
+              onBlur={(e) => {
+                const v = e.target.value.trim().toUpperCase();
+                if (/^[A-Z][A-Z0-9]{3}$/.test(v)) set({ metarStation: v });
+                else e.target.value = cfg.metarStation;
+              }}
+            />
           </Row>
         </Section>
 

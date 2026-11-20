@@ -79,6 +79,21 @@ export interface Config {
   /** Global brightness 0..1 (helps keep projector blacks deep). */
   brightness: number;
 
+  /** Size each glyph by the aircraft's real wingspan (ICAO type), not its class. */
+  trueScale: boolean;
+
+  // --- feed honesty / replay ---
+  /** When the sky has been empty or the feed down for `replayAfterMin`,
+   *  replay recently recorded traffic, clearly labelled as a replay. */
+  replayWhenQuiet: boolean;
+  replayAfterMin: number;
+
+  // --- airport weather ---
+  /** Show the nearest airport's METAR line on the ceiling. */
+  showMetar: boolean;
+  /** ICAO station for the METAR (4 letters, e.g. VEBD = Bagdogra). */
+  metarStation: string;
+
   // --- labels ---
   labelDensity: LabelDensity;
   nearestN: number;
@@ -190,6 +205,13 @@ export const DEFAULT_CONFIG: Config = {
   altitudeColor: true,
   trailSeconds: 45,
   brightness: 1,
+  trueScale: true,
+
+  replayWhenQuiet: true,
+  replayAfterMin: 3,
+
+  showMetar: true,
+  metarStation: "VEBD",
 
   labelDensity: "all",
   nearestN: 5,
