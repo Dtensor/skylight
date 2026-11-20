@@ -19,6 +19,7 @@ import {
   metersToMiles,
   EMERGENCY_SQUAWKS,
   trueScaleFactor,
+  displayHex,
   type Aircraft,
   type SourceStatus,
   type Config,
@@ -383,7 +384,8 @@ export class Renderer {
     const st = this.status;
     if (st?.mode === "replay" && st.replayOf) {
       const at = new Date(st.replayOf).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      parts.push(`REPLAY · recorded ${at}${st.ok ? " · sky quiet" : " · feed down"}`);
+      const why = st.replayReason === "preview" ? "preview" : st.replayReason === "down" || !st.ok ? "feed down" : "sky quiet";
+      parts.push(`REPLAY · recorded ${at} · ${why}`);
     } else if (st?.mode === "stale") {
       parts.push("feed stale · holding last picture");
     } else if (st?.mode === "unavailable") {
@@ -896,7 +898,7 @@ export class Renderer {
   private labelLines(cfg: Config, ac: Aircraft): { text: string; kind: "title" | "sub" }[] {
     const f = cfg.showFields;
     const out: { text: string; kind: "title" | "sub" }[] = [];
-    const title = f.flight ? ac.flight ?? ac.hex.toUpperCase() : ac.airline;
+    const title = f.flight ? ac.flight ?? displayHex(ac.hex) : ac.airline;
     if (title) out.push({ text: title, kind: "title" });
 
     const sub: string[] = [];
@@ -1033,7 +1035,7 @@ export class Renderer {
     }
     ctx.font = `300 34px ${cfg.fonts.label}`;
     ctx.fillStyle = rgba([245, 247, 255], v.alpha);
-    ctx.fillText(ac.flight ?? ac.hex.toUpperCase(), x, y);
+    ctx.fillText(ac.flight ?? displayHex(ac.hex), x, y);
     try {
       ctx.letterSpacing = "0.5px";
     } catch {

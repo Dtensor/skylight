@@ -19,6 +19,8 @@ export interface SourceStatus {
   mode?: FeedMode;
   /** During replay: when (ms epoch) the frame being shown was recorded. */
   replayOf?: number;
+  /** Why a replay is on: the sky is empty, the feed is down, or a preview. */
+  replayReason?: "quiet" | "down" | "preview";
 }
 
 export type FeedMode = "live" | "stale" | "replay" | "unavailable";

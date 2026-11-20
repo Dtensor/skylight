@@ -138,6 +138,12 @@ export class Poller {
   /** When live traffic was last seen; quiet time counts from start-up. */
   private lastTraffic = Date.now();
   private replaying = false;
+  /** Replay forced on until this time (ms epoch) by a preview request. */
+  private previewUntil = 0;
+
+  previewReplay(ms: number): void {
+    this.previewUntil = ms > 0 ? Date.now() + ms : 0;
+  }
 
   constructor(private o: PollerOptions) {
     this.status = {
@@ -264,9 +270,10 @@ export class Poller {
     // feed is down. Then (if allowed) replay recorded traffic, labelled.
     const quietMs = now - this.lastTraffic;
     const replay = this.o.replay;
+    const previewing = now < this.previewUntil;
     const wantReplay =
-      cfg.replayWhenQuiet && !!replay && replay.size >= 2 &&
-      quietMs > Math.max(0.5, cfg.replayAfterMin) * 60_000;
+      !!replay && replay.size >= 2 &&
+      (previewing || (cfg.replayWhenQuiet && quietMs > Math.max(0.5, cfg.replayAfterMin) * 60_000));
     if (wantReplay && !this.replaying) replay!.startPlayback(now);
     this.replaying = wantReplay;
     const frame = wantReplay ? replay!.frameAt(now) : null;
@@ -280,8 +287,9 @@ export class Poller {
         lastOk,
         mode: "replay",
         replayOf: frame.recordedAt,
+        replayReason: previewing ? "preview" : primary === null ? "down" : "quiet",
         message: `replay of traffic recorded ${new Date(frame.recordedAt).toISOString()}` +
-          (primary === null ? " · live feed down" : " · sky quiet"),
+          (previewing ? " · preview" : primary === null ? " · live feed down" : " · sky quiet"),
       };
       this.o.onSnapshot(now, this.last);
       this.o.onStatus(this.status);
@@ -295,6 +303,7 @@ export class Poller {
         ok: false,
         mode: held ? "stale" : "unavailable",
         replayOf: undefined,
+        replayReason: undefined,
         message: "source fetch failed",
       };
       this.o.onStatus(this.status);

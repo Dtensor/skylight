@@ -20,7 +20,9 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = resolve(__dirname, "../data");
+// Override for throwaway test instances, so they never share the live
+// display's config.json / replay.json / sightings.json.
+const DATA_DIR = process.env.DATA_DIR ? resolve(process.env.DATA_DIR) : resolve(__dirname, "../data");
 const WEB_DIST = resolve(__dirname, "../../web/dist");
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -296,6 +298,16 @@ async function main(): Promise<void> {
       if (hit) return res.json(hit.body); // last good beats nothing; client ages it
       res.status(502).json({ error: "metar unavailable" });
     }
+  });
+
+  // Preview the quiet-sky replay on demand (e.g. to see it on the ceiling at
+  // your own location). In memory only; ends by itself. seconds: 5..600, 0 stops.
+  app.post("/api/replay/preview", (req, res) => {
+    const sec = Number(req.body?.seconds ?? 60);
+    if (!Number.isFinite(sec) || sec < 0 || sec > 600) return res.status(400).json({ error: "seconds must be 0..600" });
+    if (sec > 0 && replay.size < 2) return res.status(409).json({ error: "nothing recorded yet" });
+    poller.previewReplay(sec * 1000);
+    res.json({ previewUntil: sec ? Date.now() + sec * 1000 : null, frames: replay.size });
   });
 
   app.post("/api/source", (req, res) => {

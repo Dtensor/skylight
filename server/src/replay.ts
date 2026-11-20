@@ -139,9 +139,11 @@ export class ReplayStore {
         x == null || y == null ? x : x + (y - x) * f;
       out.lat = lerp(p0.lat, q.lat) ?? undefined;
       out.lon = lerp(p0.lon, q.lon) ?? undefined;
-      out.altBaro = lerp(p0.altBaro, q.altBaro) ?? p0.altBaro;
-      out.altGeom = lerp(p0.altGeom, q.altGeom) ?? p0.altGeom;
-      out.gs = lerp(p0.gs, q.gs) ?? undefined;
+      // Reported values are whole feet / knots; keep blended ones that way.
+      const whole = (x?: number | null) => (x == null ? x : Math.round(x));
+      out.altBaro = whole(lerp(p0.altBaro, q.altBaro)) ?? p0.altBaro;
+      out.altGeom = whole(lerp(p0.altGeom, q.altGeom)) ?? p0.altGeom;
+      out.gs = whole(lerp(p0.gs, q.gs)) ?? undefined;
       if (p0.track != null && q.track != null) out.track = blendBearing(p0.track, q.track, f);
       return out;
     });

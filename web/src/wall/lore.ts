@@ -6,6 +6,7 @@
 
 import type { CraftView } from "./aircraft.js";
 import { SEATS, seatScene } from "./seats.js";
+import { displayHex } from "@shared/index.js";
 
 /** Conditions at a point on Earth (server /api/point, from open-meteo). */
 export interface Point {
@@ -414,7 +415,7 @@ export class Lore {
     const v = c.focus;
     if (!v) return [];
     const a = v.ac;
-    const call = (a.flight || a.registration || a.hex.toUpperCase()).trim();
+    const call = (a.flight || a.registration || displayHex(a.hex)).trim();
     const out: Item[] = personal(c, v, call);
     const t = (a.typeCode ?? "").toUpperCase();
     const hit = TYPES.find(([re]) => re.test(t));

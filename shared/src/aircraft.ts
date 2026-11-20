@@ -54,6 +54,12 @@ export interface Aircraft {
   replay?: boolean;
 }
 
+/** The ICAO address as people read it: upper-case, without the replay
+ *  track suffix ("80157c~r0.0" -> "80157C"). */
+export function displayHex(hex: string): string {
+  return hex.split("~")[0].toUpperCase();
+}
+
 /** A single broadcast snapshot of the current sky. */
 export interface AircraftSnapshot {
   /** Server time (ms epoch) the snapshot was produced. */

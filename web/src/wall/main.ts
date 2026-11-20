@@ -10,7 +10,7 @@
 
 import * as THREE from "three";
 import * as Astronomy from "astronomy-engine";
-import { DEFAULT_CONFIG, type Config } from "@shared/index.js";
+import { DEFAULT_CONFIG, displayHex, type Config } from "@shared/index.js";
 import { Connection } from "../lib/connection.js";
 import { Sky, dirFromAzEl } from "./sky.js";
 import { Horizon } from "./horizon.js";
@@ -327,7 +327,7 @@ function start(): void {
       ["HEADING", a.track != null ? `${Math.round(a.track)}°  ${compass(a.track)}` : "—"],
       ["DISTANCE", `${n0(v.rangeKm)} km to the ${compass(v.az)}`],
       ["VERTICAL", Math.abs(vr) < 200 ? "level" : `${vr > 0 ? "climbing" : "descending"} ${n0(Math.abs(vr))} ft/min`],
-      ["REGISTRATION", a.registration || a.hex.toUpperCase()],
+      ["REGISTRATION", a.registration || displayHex(a.hex)],
     ];
     const pad = fs * 0.95;
     const cw = Math.min(H * 0.6 * Math.max(1, (cfg.wallTextScale || 1) * 0.95), W * 0.5);
