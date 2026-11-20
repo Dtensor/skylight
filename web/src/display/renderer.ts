@@ -22,11 +22,13 @@ import {
   displayHex,
   type Aircraft,
   type SourceStatus,
+  type SkyAlert,
   type Config,
   type Meters,
   type Point,
 } from "@shared/index.js";
 import { AIRPORTS } from "./airports.js";
+import { airportEta } from "../lib/eta.js";
 import { classifyGlyph, drawAircraftGlyph, GLYPH_SCALE } from "./aircraftGlyph.js";
 import { computeSky, type Sky, type Tle } from "./celestial.js";
 import { ASTERISMS } from "./stars.js";
@@ -138,6 +140,10 @@ export class Renderer {
   // Feed honesty + airport weather, drawn as one dim footer line.
   private status: SourceStatus | null = null;
   private metar: Metar | null = null;
+  private alerts: SkyAlert[] = [];
+  // Ceiling tour: which aircraft is highlighted, and since when (perf ms).
+  private tourHex = "";
+  private tourSince = 0;
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -192,6 +198,57 @@ export class Renderer {
   }
   setMetar(metar: Metar | null): void {
     this.metar = metar;
+  }
+  setAlerts(alerts: SkyAlert[]): void {
+    this.alerts = alerts;
+  }
+
+  /** Hexes alerted in the last `ms`, newest first. */
+  private alertedWithin(ms: number): SkyAlert[] {
+    const now = Date.now();
+    return this.alerts.filter((a) => now - a.at < ms);
+  }
+
+  /**
+   * The ceiling's tour (airtraffic.stream's "Aircraft TV", for a ceiling):
+   * dwell on one aircraft for 20 s, then the next. A fresh alert jumps the
+   * queue so the A380 or the emergency is what you are shown.
+   */
+  private pickTour(visible: Visible[], now: number): Visible | null {
+    if (!visible.length) return null;
+    const hot = this.alertedWithin(120_000).map((a) => a.hex);
+    for (const hex of hot) {
+      const v = visible.find((x) => x.tr.ac.hex === hex);
+      if (v && this.tourHex !== hex) {
+        this.tourHex = hex;
+        this.tourSince = now;
+        return v;
+      }
+    }
+    const cur = visible.find((x) => x.tr.ac.hex === this.tourHex);
+    if (cur && now - this.tourSince < 20_000) return cur;
+    const order = [...visible].sort((a, b) => a.rangeMi - b.rangeMi);
+    const i = order.findIndex((x) => x.tr.ac.hex === this.tourHex);
+    const next = order[(i + 1) % order.length];
+    this.tourHex = next.tr.ac.hex;
+    this.tourSince = now;
+    return next;
+  }
+
+  /** Thin ring around an aircraft; pulsing for alerts. */
+  private drawRing(cfg: Config, v: Visible, color: string, pulse: boolean): void {
+    const ctx = this.ctx;
+    const base = cfg.glyphSizePx * 1.9;
+    const r = pulse ? base * (1 + 0.25 * (0.5 + 0.5 * Math.sin(this.frameT * 4))) : base;
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = (pulse ? 0.75 : 0.45) * v.alpha;
+    ctx.lineWidth = 1.4;
+    if (!pulse) ctx.setLineDash([4, 5]);
+    ctx.beginPath();
+    ctx.arc(v.p.x, v.p.y, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
   }
 
   resize(): void {
@@ -372,7 +429,16 @@ export class Renderer {
     const byNear = [...visible].reverse(); // nearest first
     this.drawLabels(cfg, byNear);
 
-    if (cfg.theme === "focus" && byNear.length) this.drawDetailPanel(cfg, byNear[0]);
+    // Alerted aircraft pulse for 10 minutes after the alert.
+    const hot = new Map(this.alertedWithin(600_000).map((a) => [a.hex, a] as const));
+    for (const v of visible) {
+      const a = hot.get(v.tr.ac.hex);
+      if (a) this.drawRing(cfg, v, a.kind === "emergency" ? cfg.palette.warn : cfg.palette.accent, true);
+    }
+    const tour = cfg.ceilingTour ? this.pickTour(visible, now) : null;
+    if (tour && !hot.has(tour.tr.ac.hex)) this.drawRing(cfg, tour, cfg.palette.text, false);
+
+    if (cfg.theme === "focus" && byNear.length) this.drawDetailPanel(cfg, tour ?? byNear[0]);
     this.drawFooter(cfg);
   }
 
@@ -391,6 +457,8 @@ export class Renderer {
     } else if (st?.mode === "unavailable") {
       parts.push("aircraft feed unavailable");
     }
+    const latest = this.alertedWithin(120_000)[0];
+    if (latest) parts.push(`★ ${latest.title} · ${latest.detail}`);
     if (cfg.showMetar && this.metar) parts.push(formatMetar(this.metar));
     if (!parts.length) return;
     const ctx = this.ctx;
@@ -404,8 +472,9 @@ export class Renderer {
     this.withLabelRotation(cfg, this.w / 2, this.h / 2, () => {
       parts.forEach((text, i) => {
         const isReplay = replay && i === 0;
-        ctx.fillStyle = isReplay ? cfg.palette.accent : cfg.palette.text;
-        ctx.globalAlpha = (isReplay ? 0.85 : 0.5) * cfg.brightness;
+        const isAlert = text.startsWith("★");
+        ctx.fillStyle = isReplay || isAlert ? cfg.palette.accent : cfg.palette.text;
+        ctx.globalAlpha = (isReplay || isAlert ? 0.85 : 0.5) * cfg.brightness;
         ctx.fillText(text, 18, this.h - 16 - (parts.length - 1 - i) * 18);
       });
     });
@@ -924,6 +993,10 @@ export class Renderer {
       }
     }
     if (f.registration && ac.registration) out.push({ text: ac.registration, kind: "sub" });
+    if (cfg.showAirportEta) {
+      const eta = airportEta(ac, AIRPORTS);
+      if (eta) out.push({ text: eta.text, kind: "sub" });
+    }
     return out;
   }
 

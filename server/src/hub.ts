@@ -9,6 +9,7 @@ import type {
   Config,
   Aircraft,
   SourceStatus,
+  SkyAlert,
 } from "@shared/index.js";
 import type { ConfigStore } from "./config-store.js";
 
@@ -71,6 +72,9 @@ export class Hub {
   }
   broadcastStatus(status: SourceStatus): void {
     this.broadcast({ type: "status", status });
+  }
+  broadcastAlert(alert: SkyAlert): void {
+    this.broadcast({ type: "alert", alert });
   }
   broadcastConfig(config: Config): void {
     this.broadcast({ type: "config", config });

@@ -58,3 +58,30 @@ export function trueScaleFactor(typeCode?: string): number | null {
   if (!d) return null;
   return Math.min(2.3, Math.max(0.42, d.spanM / REFERENCE_SPAN_M));
 }
+
+// --- what makes an aircraft worth a second look over the eastern Himalaya ---
+
+// Four-engine giants only: 777-300ERs are routine long-haul traffic here
+// (four of them in one evening's first snapshot), so they stay "widebody".
+const HEAVY = new Set(["A388", "B744", "B748", "B74S", "B742", "A124", "A225", "A342", "A343", "A345", "A346"]);
+const MILITARY = new Set([
+  "C17", "IL76", "IL78", "C130", "C30J", "A400", "AN12", "AN26", "AN32", "P8",
+  "K35R", "KC10", "E3TF", "AJET", "SU30", "MG29", "TEJAS", "HAWK", "C295", "IL62",
+]);
+const WIDE = new Set([
+  "B77W", "B779", "A306", "A310", "A332", "A333", "A338", "A339", "A359", "A35K", "B762", "B763",
+  "B764", "B772", "B77L", "B773", "B778", "B788", "B789", "B78X", "MD11",
+]);
+
+export type NotableKind = "emergency" | "heavy" | "military" | "widebody";
+
+/** Emergency squawk first, then very large or military airframes. */
+export function notableKind(typeCode?: string, squawk?: string): NotableKind | null {
+  if (squawk === "7500" || squawk === "7600" || squawk === "7700") return "emergency";
+  const t = typeCode?.toUpperCase();
+  if (!t) return null;
+  if (HEAVY.has(t)) return "heavy";
+  if (MILITARY.has(t)) return "military";
+  if (WIDE.has(t)) return "widebody";
+  return null;
+}

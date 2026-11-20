@@ -88,6 +88,20 @@ export interface Config {
   replayWhenQuiet: boolean;
   replayAfterMin: number;
 
+  // --- notable aircraft ---
+  /** Raise alerts for emergencies, very large and military aircraft. */
+  alerts: boolean;
+  /** Soft chime on the wall for an alert (not for strangers). */
+  alertChime: boolean;
+  /** Also note aircraft never seen from here before (quiet, can be frequent). */
+  alertStrangers: boolean;
+
+  // --- tours ---
+  /** Ceiling: cycle a highlight (and the Focus panel) through the aircraft. */
+  ceilingTour: boolean;
+  /** Label lines like "→ IXB in 12 min" for the airports drawn on the map. */
+  showAirportEta: boolean;
+
   // --- airport weather ---
   /** Show the nearest airport's METAR line on the ceiling. */
   showMetar: boolean;
@@ -209,6 +223,13 @@ export const DEFAULT_CONFIG: Config = {
 
   replayWhenQuiet: true,
   replayAfterMin: 3,
+
+  alerts: true,
+  alertChime: true,
+  alertStrangers: false,
+
+  ceilingTour: false,
+  showAirportEta: true,
 
   showMetar: true,
   metarStation: "VEBD",

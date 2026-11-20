@@ -78,6 +78,11 @@ export class Memory {
     }
   }
 
+  /** Has this aircraft ever been recorded from here (before right now)? */
+  isKnown(lat: number, lon: number, hex: string): boolean {
+    return !!this.place(lat, lon).craft[hex];
+  }
+
   get(lat: number, lon: number, hex: string, flight: string) {
     const p = this.place(lat, lon);
     const f = p.flights[flight];

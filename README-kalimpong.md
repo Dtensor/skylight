@@ -234,3 +234,26 @@ The status pill at the top shows `· replay` or `· stale` whenever the feed isn
 
 - Replay needs at least 2 recorded frames. After a fresh install, there's nothing to replay until some traffic has been seen.
 - To test replay without waiting for a quiet night, briefly set `centerLat/centerLon` to open ocean and `replayAfterMin` to 1, then **restore them**. This shares `server/data/config.json` with the live display.
+
+## Alerts, tours, airport times and a highlight reel (added 2026-11-20)
+
+### What we built
+
+- **A · Airport arrival times.** Planes heading to an airport on the map get a label line such as **`→ PBH in 7 min`**. Planes that took off from one get **`IXB departure · 34 mi out`**. On the wall, the same text joins the card's route line. The time is straight-line distance divided by ground speed, so it's close on final approach and optimistic further out (it can't know about holding patterns), which is why times over 25 min show a `~`.
+- **B · Tour the sky.** On the ceiling, a dashed ring settles on one aircraft for 20 s and then moves to the next; in the Focus theme, the detail panel follows it. The wall already toured on its own (the close-up changes every 22 s). Now both screens jump straight to an aircraft that has just raised an alert.
+- **C · Notable aircraft.** The server watches the **live** sky only, never a replay. It raises one alert per aircraft every 6 hours for an **emergency squawk** (7500/7600/7700), a **four-engine giant** (A380, 747, An-124, A340) or a **military transport** (C-17, Il-76, C-130J, A400M…), all within the ceiling's radius. You get a pulsing ring and a ★ line on the ceiling, a soft chime on the wall (three firmer notes for an emergency), and a list in the phone panel. **First sightings** (aircraft never seen from here before) are available too, quiet and off by default because they're frequent.
+  - Aircraft already in view when the server starts don't chime: the first snapshot is treated as the starting point. Emergencies always alert.
+  - 777-300ERs don't count: they're everyday long-haul traffic here. On the first live run, four of them would have chimed at once.
+- **D · Highlight reel.** When snapshots age out of the 30-minute replay window, the interesting ones are kept: frames with a heavy or military aircraft, or noticeably busier than usual (up to 300 frames). A quiet-sky replay plays the highlights first, then the recent half hour.
+
+### How you use it
+
+Phone panel → **Notable aircraft** (Alerts / Chime / First sightings, **Test alert** button, recent list) and **View → Tour the sky / Airport arrival times**.
+To check the wiring: `curl -X POST localhost:21260/api/alerts/test` rings the nearest aircraft and is labelled `TEST`.
+To see the replay without waiting for a quiet night: `curl -X POST -H 'Content-Type: application/json' -d '{"seconds":90}' localhost:21260/api/replay/preview` (`0` stops it).
+
+### Gotchas
+
+- Alerts are kept in memory. A restart clears the list and the 6-hour cooldowns, and the start-up seeding stops the burst that would otherwise follow.
+- The chime only plays on the wall, and only when wall sound is on: a ceiling projector usually has no speaker.
+- `DATA_DIR=/some/dir` gives a test instance its own `config.json`, `replay.json` and `sightings.json`. Use it for experiments instead of touching the live display's files.

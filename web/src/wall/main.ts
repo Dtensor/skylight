@@ -12,6 +12,8 @@ import * as THREE from "three";
 import * as Astronomy from "astronomy-engine";
 import { DEFAULT_CONFIG, displayHex, type Config } from "@shared/index.js";
 import { Connection } from "../lib/connection.js";
+import { airportEta } from "../lib/eta.js";
+import { AIRPORTS } from "../display/airports.js";
 import { Sky, dirFromAzEl } from "./sky.js";
 import { Horizon } from "./horizon.js";
 import { Fleet, type CraftView } from "./aircraft.js";
@@ -124,10 +126,22 @@ function start(): void {
   // --- data plumbing ---
   let horizonFor = "";
   let lastSnapshot = -1;
+  const seenAlerts = new Set<string>();
+  let alertsPrimed = false;
+  let alertFocus: { hex: string; until: number } | null = null;
   let showHud = true;
   conn.subscribe((s) => {
     connected = s.connected;
     status = s.status;
+    // New notable-aircraft alerts: chime once, and steer the close-up to it.
+    for (const a of s.alerts) {
+      if (seenAlerts.has(a.id)) continue;
+      seenAlerts.add(a.id);
+      if (!alertsPrimed || Date.now() - a.at > 120_000) continue; // backlog: no chime
+      alertFocus = { hex: a.hex, until: performance.now() / 1000 + 120 };
+      if (cfg.alertChime && a.chime && cfg.wallSound) sound.chime(a.kind === "emergency");
+    }
+    alertsPrimed = true;
     if (s.config) cfg = s.config;
     const key = `${cfg.centerLat},${cfg.centerLon}`;
     if (s.config && key !== horizonFor) {
@@ -247,6 +261,17 @@ function start(): void {
   let focusHex = "";
   let focusSince = -1e9;
   function pickFocus(tSec: number, list: CraftView[], onScreen: Set<string>): CraftView | null {
+    // A fresh alert takes the close-up for up to two minutes.
+    if (alertFocus && tSec < alertFocus.until) {
+      const hot = list.find((v) => v.ac.hex === alertFocus!.hex);
+      if (hot) {
+        if (focusHex !== hot.ac.hex) {
+          focusHex = hot.ac.hex;
+          focusSince = tSec;
+        }
+        return hot;
+      }
+    }
     const pool = list.filter((v) => onScreen.has(v.ac.hex));
     const cands = pool.length ? pool : list;
     const cur = list.find((v) => v.ac.hex === focusHex);
@@ -320,6 +345,8 @@ function start(): void {
     const trueEl = Math.asin(Math.max(-1, Math.min(1, (altFt * 0.0003048 - observerKm) / Math.max(v.rangeKm, 0.1)))) / D2R;
     const route = a.originName && a.destName ? `${a.originName}  →  ${a.destName}`
       : a.origin && a.destination ? `${a.origin}  →  ${a.destination}` : "Route not published";
+    const eta = cfg.showAirportEta ? airportEta(a, AIRPORTS) : null;
+    const routeLine = eta ? `${route}  ·  ${eta.text}` : route;
     const soundMin = v.rangeKm / 0.34 / 60;
     const cells: [string, string][] = [
       ["ALTITUDE", `${n0(altFt)} ft  ·  ${n0(altFt * 0.3048)} m`],
@@ -362,7 +389,7 @@ function start(): void {
     y += fs * 2.3;
     ov.font = `500 ${fs * 1.12}px ${FONT}`;
     ov.fillStyle = "rgba(255,226,170,0.98)";
-    ov.fillText(route, x0 + pad, y, cw - pad * 2);
+    ov.fillText(routeLine, x0 + pad, y, cw - pad * 2);
     y += fs * 1.9;
     const colW = (cw - pad * 2) / 3;
     cells.forEach(([k, val], i) => {

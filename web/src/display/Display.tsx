@@ -35,6 +35,10 @@ export function Display() {
     rendererRef.current?.update(state.aircraft);
   }, [state.now, state.aircraft]);
 
+  useEffect(() => {
+    rendererRef.current?.setAlerts(state.alerts);
+  }, [state.alerts]);
+
   // Feed status (live / stale / replay) for the on-ceiling label.
   useEffect(() => {
     rendererRef.current?.setStatus(state.status ?? null);
@@ -49,21 +53,25 @@ export function Display() {
       return;
     }
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Every 5 minutes; after a failure, try again in 30 s (the first fetch
+    // after a server restart can miss).
     const load = async () => {
+      let next = 5 * 60_000;
       try {
         const r = await fetch(`/api/metar?id=${encodeURIComponent(station)}`, { signal: AbortSignal.timeout(30000) });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const m = (await r.json()) as Metar;
         if (!cancelled) rendererRef.current?.setMetar(m);
       } catch {
-        /* keep the last one; formatMetar marks it old once it ages */
+        next = 30_000; // keep the last one meanwhile; formatMetar marks it old
       }
+      if (!cancelled) timer = setTimeout(() => void load(), next);
     };
     void load();
-    const id = setInterval(() => void load(), 5 * 60_000);
     return () => {
       cancelled = true;
-      clearInterval(id);
+      clearTimeout(timer);
     };
   }, [showMetar, station]);
 

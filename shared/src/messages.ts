@@ -25,9 +25,26 @@ export interface SourceStatus {
 
 export type FeedMode = "live" | "stale" | "replay" | "unavailable";
 
+/** Something in the sky worth a look, raised once per aircraft (live only). */
+export interface SkyAlert {
+  id: string;
+  /** ms epoch the alert was raised. */
+  at: number;
+  hex: string;
+  flight?: string;
+  kind: "emergency" | "heavy" | "military" | "stranger";
+  /** Short headline, e.g. "Airbus A380 overhead". */
+  title: string;
+  /** One line of context: callsign, route, distance. */
+  detail: string;
+  /** Whether a chime suits it (strangers are quiet). */
+  chime: boolean;
+}
+
 /** Server -> client. */
 export type ServerMessage =
   | { type: "config"; config: Config }
+  | { type: "alert"; alert: SkyAlert }
   | { type: "aircraft"; now: number; aircraft: Aircraft[] }
   | { type: "status"; status: SourceStatus };
 

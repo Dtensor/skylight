@@ -327,6 +327,20 @@ export class Soundscape {
     }
   }
 
+  /**
+   * Alert chime: a soft rising third for something notable, a firmer
+   * three-note figure for an emergency squawk. Kept under the ambience.
+   */
+  chime(urgent: boolean): void {
+    if (!this.running) return;
+    const t = this.ctx!.currentTime + 0.05;
+    const notes = urgent ? [[0, 880], [0.28, 880], [0.56, 660]] : [[0, 659], [0.32, 831]];
+    for (const [dt, f] of notes) {
+      this.tone(t + dt, f, f, urgent ? 0.5 : 1.4, urgent ? 0.07 : 0.05, 0, 0.01, 3200);
+      this.tone(t + dt, f * 2, f * 2, 0.6, 0.012, 0, 0.01, 4000);
+    }
+  }
+
   /** A far monastery bell: inharmonic partials with long, uneven decays. */
   bell(): void {
     if (!this.running) return;

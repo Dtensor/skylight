@@ -16,6 +16,7 @@ import { Hub } from "./hub.js";
 import { TleStore } from "./tle.js";
 import { Memory } from "./memory.js";
 import { ReplayStore } from "./replay.js";
+import { Alerts } from "./alerts.js";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 
@@ -48,6 +49,8 @@ const ROUTE_CACHE_HOURS = Number(process.env.ROUTE_CACHE_HOURS ?? 12);
 // When on radio, also poll the API and merge (keeps landing aircraft alive).
 const SUPPLEMENT_API = (process.env.SUPPLEMENT_API ?? "1") !== "0";
 const API_POLL_MS = Number(process.env.API_POLL_MS ?? 4000);
+
+let alerts: Alerts | null = null;
 
 async function main(): Promise<void> {
   const store = new ConfigStore(resolve(DATA_DIR, "config.json"));
@@ -90,7 +93,13 @@ async function main(): Promise<void> {
     apiPollMs: API_POLL_MS,
     getConfig: () => store.get(),
     enricher,
-    onSnapshot: (now, aircraft) => hub.broadcastAircraft(now, aircraft),
+    onSnapshot: (now, aircraft) => {
+      hub.broadcastAircraft(now, aircraft);
+      // Alerts watch only the live sky: replayed frames are flagged and skipped.
+      if (alerts && !aircraft.some((a) => a.replay)) {
+        for (const a of alerts.check(now, aircraft, store.get())) hub.broadcastAlert(a);
+      }
+    },
     onStatus: (status) => hub.broadcastStatus(status),
     replay,
   });
@@ -98,6 +107,26 @@ async function main(): Promise<void> {
   // The sky's memory: note who is overhead once a minute.
   const memory = new Memory(resolve(DATA_DIR, "sightings.json"));
   await memory.load();
+  alerts = new Alerts((lat, lon, hex) => memory.isKnown(lat, lon, hex));
+  app.get("/api/alerts", (_req, res) => res.json(alerts?.list() ?? []));
+  // Fire a clearly-labelled test alert, to check the chime and the highlight.
+  app.post("/api/alerts/test", (_req, res) => {
+    // The nearest aircraft in view, so the pulsing ring can be seen.
+    const c = store.get();
+    const d = (a: { lat?: number; lon?: number }) =>
+      Math.hypot((a.lat! - c.centerLat) * 69, (a.lon! - c.centerLon) * 69 * Math.cos((c.centerLat * Math.PI) / 180));
+    const ac = poller.getLiveSnapshot().aircraft
+      .filter((a) => a.lat != null && a.lon != null)
+      .sort((a, b) => d(a) - d(b))[0];
+    const now = Date.now();
+    const alert = {
+      id: `test:${now}`, at: now, hex: ac?.hex ?? "test", flight: ac?.flight,
+      kind: "heavy" as const, title: "TEST alert", detail: ac ? `${ac.flight ?? ac.hex} · test only` : "no aircraft in view",
+      chime: true,
+    };
+    hub.broadcastAlert(alert);
+    res.json(alert);
+  });
   setInterval(() => {
     const c = store.get();
     memory.note(c.centerLat, c.centerLon, poller.getLiveSnapshot().aircraft);

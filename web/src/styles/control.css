@@ -263,3 +263,33 @@ main {
   text-transform: uppercase;
   text-align: center;
 }
+
+.alert-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--panel);
+}
+.alert-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  padding: 10px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 13px;
+}
+.alert-time {
+  grid-row: span 2;
+  font-family: ui-monospace, monospace;
+  opacity: 0.6;
+}
+.alert-title {
+  font-weight: 600;
+}
+.alert-item.emergency .alert-title {
+  color: #ff5a47;
+}
+.alert-detail {
+  opacity: 0.7;
+  font-size: 12px;
+}

@@ -7,6 +7,7 @@ import type {
   Config,
   ServerMessage,
   SourceStatus,
+  SkyAlert,
 } from "@shared/index.js";
 
 export interface StreamState {
@@ -15,6 +16,8 @@ export interface StreamState {
   now: number;
   aircraft: Aircraft[];
   status: SourceStatus | null;
+  /** Recent notable-aircraft alerts, newest first. */
+  alerts: SkyAlert[];
 }
 
 type Listener = (state: StreamState) => void;
@@ -31,6 +34,7 @@ export class Connection {
     now: 0,
     aircraft: [],
     status: null,
+    alerts: [],
   };
 
   constructor(private role: "display" | "control") {}
@@ -55,6 +59,13 @@ export class Connection {
     this.ws.onopen = () => {
       this.send({ type: "hello", role: this.role });
       this.update({ connected: true });
+      // Catch up on alerts raised while this page was closed.
+      void fetch("/api/alerts", { signal: AbortSignal.timeout(30000) })
+        .then((r) => (r.ok ? r.json() : []))
+        .then((list: SkyAlert[]) => {
+          if (Array.isArray(list) && !this.state.alerts.length) this.update({ alerts: list });
+        })
+        .catch(() => {});
     };
     this.ws.onclose = () => {
       this.update({ connected: false });
@@ -88,6 +99,9 @@ export class Connection {
         break;
       case "status":
         this.update({ status: msg.status });
+        break;
+      case "alert":
+        this.update({ alerts: [msg.alert, ...this.state.alerts].slice(0, 30) });
         break;
     }
   }

@@ -182,6 +182,43 @@ export function Control() {
           <Row label="True-scale wingspans" hint="size by real aircraft type; A380 ≈ 2.2× an A320">
             <Toggle value={cfg.trueScale} onChange={(v) => set({ trueScale: v })} />
           </Row>
+          <Row label="Tour the sky" hint="highlight one aircraft at a time, 20 s each">
+            <Toggle value={cfg.ceilingTour} onChange={(v) => set({ ceilingTour: v })} />
+          </Row>
+          <Row label="Airport arrival times" hint="→ IXB in 12 min, PBH departures">
+            <Toggle value={cfg.showAirportEta} onChange={(v) => set({ showAirportEta: v })} />
+          </Row>
+        </Section>
+
+        <Section title="Notable aircraft">
+          <Row label="Alerts" hint="emergencies, A380/747s, military transports">
+            <Toggle value={cfg.alerts} onChange={(v) => set({ alerts: v })} />
+          </Row>
+          <Row label="Chime on the wall">
+            <Toggle value={cfg.alertChime} onChange={(v) => set({ alertChime: v })} />
+          </Row>
+          <Row label="First sightings" hint="aircraft never seen from here; quiet, can be frequent">
+            <Toggle value={cfg.alertStrangers} onChange={(v) => set({ alertStrangers: v })} />
+          </Row>
+          <div className="chips">
+            <button className="chip"
+              onClick={() => void fetch("/api/alerts/test", { method: "POST", signal: AbortSignal.timeout(30000) }).catch(() => {})}>
+              Test alert
+            </button>
+          </div>
+          {state.alerts.length > 0 && (
+            <ul className="alert-list">
+              {state.alerts.slice(0, 8).map((a) => (
+                <li key={a.id} className={`alert-item ${a.kind}`}>
+                  <span className="alert-time">
+                    {new Date(a.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </span>
+                  <span className="alert-title">{a.title}</span>
+                  <span className="alert-detail">{a.detail}</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </Section>
 
         <Section title="Feed & weather">

@@ -8,7 +8,7 @@
 
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { Aircraft } from "@shared/index.js";
+import { notableKind, type Aircraft } from "@shared/index.js";
 
 interface Frame {
   t: number;
@@ -46,8 +46,20 @@ export function blendBearing(a: number, b: number, f: number): number {
   return (a + ((((b - a + 540) % 360) - 180) * f) + 360) % 360;
 }
 
+/** How interesting a frame is: busy skies and big or military iron score. */
+export function frameScore(f: Frame): number {
+  let s = f.aircraft.length;
+  for (const a of f.aircraft) {
+    const k = notableKind(a.typeCode, a.squawk);
+    s += k === "heavy" || k === "military" || k === "emergency" ? 12 : k === "widebody" ? 4 : 0;
+  }
+  return s;
+}
+
 export class ReplayStore {
   private frames: Frame[] = [];
+  /** Best stretches that rolled out of `frames`, kept for quiet nights. */
+  private highlights: Frame[] = [];
   private lastRecord = 0;
   private dirty = false;
   // Playback state.
@@ -58,16 +70,20 @@ export class ReplayStore {
     private path: string,
     private recordEveryMs = 3_000,
     private maxFrames = 600,
+    private maxHighlights = 300,
   ) {}
 
   async load(): Promise<void> {
     try {
       const raw = JSON.parse(await readFile(this.path, "utf8")) as unknown;
-      if (Array.isArray(raw)) {
-        this.frames = raw
-          .filter((f): f is Frame => !!f && typeof f.t === "number" && Array.isArray(f.aircraft))
-          .slice(-this.maxFrames);
-      }
+      const valid = (list: unknown): Frame[] =>
+        Array.isArray(list)
+          ? list.filter((f): f is Frame => !!f && typeof f.t === "number" && Array.isArray(f.aircraft))
+          : [];
+      // Older files were a bare array of recent frames.
+      const obj = (Array.isArray(raw) ? { recent: raw } : raw) as { recent?: unknown; highlights?: unknown };
+      this.frames = valid(obj.recent).slice(-this.maxFrames);
+      this.highlights = valid(obj.highlights).slice(-this.maxHighlights);
     } catch {
       this.frames = [];
     }
@@ -77,11 +93,14 @@ export class ReplayStore {
     if (!this.dirty) return;
     this.dirty = false;
     await mkdir(dirname(this.path), { recursive: true });
-    await writeFile(this.path, JSON.stringify(this.frames));
+    await writeFile(this.path, JSON.stringify({ recent: this.frames, highlights: this.highlights }));
   }
 
   get size(): number {
-    return this.frames.length;
+    return this.frames.length + this.highlights.length;
+  }
+  get highlightCount(): number {
+    return this.highlights.length;
   }
 
   /** Keep a live snapshot. Empty skies are not recorded, so the store always
@@ -91,9 +110,33 @@ export class ReplayStore {
     if (!withPos.length || now - this.lastRecord < this.recordEveryMs) return;
     this.lastRecord = now;
     this.frames.push({ t: now, aircraft: withPos.map(compact) });
-    if (this.frames.length > this.maxFrames) this.frames.splice(0, this.frames.length - this.maxFrames);
+    if (this.frames.length > this.maxFrames) {
+      const out = this.frames.splice(0, this.frames.length - this.maxFrames);
+      this.keepHighlights(out);
+    }
     this.timeline = null;
     this.dirty = true;
+  }
+
+  /** Frames leaving the recent window are kept if they beat the usual sky:
+   *  big or military aircraft aboard, or noticeably busier than typical. */
+  private keepHighlights(out: Frame[]): void {
+    const counts = this.frames.map((f) => f.aircraft.length).sort((a, b) => a - b);
+    const median = counts.length ? counts[Math.floor(counts.length / 2)] : 0;
+    for (const f of out) {
+      const score = frameScore(f);
+      const special = score - f.aircraft.length >= 12; // a heavy, military or emergency
+      const busy = f.aircraft.length >= Math.max(3, Math.ceil(median * 1.5));
+      if (special || busy) this.highlights.push(f);
+    }
+    if (this.highlights.length > this.maxHighlights) {
+      this.highlights.splice(0, this.highlights.length - this.maxHighlights);
+    }
+  }
+
+  /** Playback order: highlights first (oldest first), then the recent window. */
+  private get reel(): Frame[] {
+    return this.highlights.length ? [...this.highlights, ...this.frames] : this.frames;
   }
 
   /** Begin (or restart) playback from the first recorded frame. */
@@ -103,10 +146,11 @@ export class ReplayStore {
   }
 
   private buildTimeline(): { pos: number[]; seg: number[]; total: number } {
+    const reel = this.reel;
     const pos = [0];
     const seg = [0];
-    for (let i = 1; i < this.frames.length; i++) {
-      const dt = this.frames[i].t - this.frames[i - 1].t;
+    for (let i = 1; i < reel.length; i++) {
+      const dt = reel[i].t - reel[i - 1].t;
       const brk = dt > SEGMENT_GAP_MS;
       pos.push(pos[i - 1] + (brk ? BREAK_MS : dt));
       seg.push(seg[i - 1] + (brk ? 1 : 0));
@@ -116,15 +160,16 @@ export class ReplayStore {
 
   /** The recorded sky at this moment of playback, or null with nothing kept. */
   frameAt(now: number): ReplayFrame | null {
-    if (this.frames.length < 2) return null;
+    const reel = this.reel;
+    if (reel.length < 2) return null;
     const tl = (this.timeline ??= this.buildTimeline());
     const elapsed = Math.max(0, now - this.playStart);
     const loop = Math.floor(elapsed / tl.total);
     const p = elapsed % tl.total;
     let i = 0;
     while (i + 1 < tl.pos.length && tl.pos[i + 1] <= p) i++;
-    const a = this.frames[i];
-    const b = this.frames[i + 1];
+    const a = reel[i];
+    const b = reel[i + 1];
     const sameSeg = !!b && tl.seg[i + 1] === tl.seg[i];
     const f = sameSeg ? (p - tl.pos[i]) / Math.max(1, tl.pos[i + 1] - tl.pos[i]) : 0;
     const later = sameSeg ? new Map(b.aircraft.map((x) => [x.hex, x])) : new Map<string, Aircraft>();
